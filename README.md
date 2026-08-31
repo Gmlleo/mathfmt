@@ -1,6 +1,6 @@
 # MathFmt
 
-[![CI](https://github.com/gml853503962-creator/mathfmt/actions/workflows/ci.yml/badge.svg)](https://github.com/gml853503962-creator/mathfmt/actions/workflows/ci.yml)
+[![CI](https://github.com/Gmlleo/mathfmt/actions/workflows/ci.yml/badge.svg)](https://github.com/Gmlleo/mathfmt/actions/workflows/ci.yml)
 
 [中文](#中文) | [English](#english)
 

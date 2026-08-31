@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 
 from ._version import __version__
 
-GITHUB_API = "https://api.github.com/repos/gml853503962-creator/mathfmt/releases"
+GITHUB_API = "https://api.github.com/repos/Gmlleo/mathfmt/releases"
 CACHE_FILE = Path.home() / ".cache" / "mathfmt" / "update-check.json"
 CACHE_TTL = 3600  # 1 hour
 
@@ -230,5 +230,5 @@ def _build_install_commands(latest_version: str) -> list[str]:
     return [
         "pip install --upgrade mathfmt",
         f"pip install --upgrade mathfmt=={latest_version}",
-        "pip install --upgrade git+https://github.com/gml853503962-creator/mathfmt.git",
+        "pip install --upgrade git+https://github.com/Gmlleo/mathfmt.git",
     ]
