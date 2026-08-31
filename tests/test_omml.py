@@ -305,6 +305,9 @@ def reparsed_omath(source: str) -> etree._Element:
         "Ca(OH)2",
         "2H2 + O2 -> 2H2O",
         "CaCO3 =>[heat] CaO + CO2",
+        "(SO4)2",  # chemistry group containing its own subscripted element
+        "Fe2(SO4)3",
+        "(NH4)2SO4",
     ],
 )
 def test_omml_to_text_round_trips_to_an_equivalent_tree(source: str) -> None:
@@ -407,3 +410,24 @@ def test_omml_to_text_non_chemistry_group_subscript_still_uses_underscore() -> N
     # `_emit_operand` also over-parenthesizes any non-atomic operand (see its
     # docstring), so the non-chemistry fallback doubles the group's own parens.
     assert omml_to_text(omath) == "((a))_2"
+
+
+def test_omml_to_text_plain_styled_non_digit_subscript_still_uses_underscore() -> None:
+    # A synthetic (non-MathFmt) m:sSub with a plain/upright-styled base but a
+    # non-digit subscript ("max", not an element count) must not be mistaken
+    # for chemistry: dropping the "_" here would corrupt "x_max" into the bare
+    # identifier "xmax" on reparse. The all-digit-subscript requirement is
+    # exactly what rules this out.
+    omath = etree.Element(qname(M_NS, "oMath"))
+    ssub = etree.SubElement(omath, qname(M_NS, "sSub"))
+    base = etree.SubElement(ssub, qname(M_NS, "e"))
+    run = etree.SubElement(base, qname(M_NS, "r"))
+    r_pr = etree.SubElement(run, qname(M_NS, "rPr"))
+    sty = etree.SubElement(r_pr, qname(M_NS, "sty"))
+    sty.set(qname(M_NS, "val"), "p")
+    etree.SubElement(run, qname(M_NS, "t")).text = "x"
+    sub = etree.SubElement(ssub, qname(M_NS, "sub"))
+    sub_run = etree.SubElement(sub, qname(M_NS, "r"))
+    etree.SubElement(sub_run, qname(M_NS, "t")).text = "max"
+
+    assert omml_to_text(omath) == "x_max"
