@@ -4,6 +4,27 @@ All notable changes to MathFmt are documented here.
 
 ## [Unreleased]
 
+### Added
+- `mathfmt gui` now shows every scanned formula candidate as a checklist (source
+  text, confidence, and parse status/reason) before converting, pre-checked with
+  the same conservative defaults as `mathfmt convert`. The server-side flow is now
+  a `/scan` step followed by an `/apply` step instead of one combined `/convert`
+  request.
+- `FormulaError.to_dict()` (and therefore a scan candidate's `parse_error_details`
+  and an apply report's `error_details`) includes a plain-language `hint` for
+  recognized mistakes — mismatched brackets, a `cases`/`{...}` branch missing
+  `if`, wrong argument counts, and a few other common shapes.
+- `omml_to_text(omath_elem)` (in `mathfmt.omml`, re-exported from the top-level
+  package) converts a native `m:oMath`/`m:oMathPara` element back to MathFmt's
+  linear formula syntax — the reverse of `mathml_to_omml_py`. Raises the new
+  `OmmlConversionError` for constructs it doesn't reverse (matrices,
+  piecewise/`cases` tables, n-ary operators) instead of guessing. See
+  `docs/formula-syntax.md` section 9 for scope and known limitations.
+- `packaging/`: a `build_exe.py` script (PyInstaller) that bundles `mathfmt gui`
+  into a standalone double-clickable executable for people without Python
+  installed. Not part of the automated release pipeline — see
+  `packaging/README.md`.
+
 ## [1.1.0] - 2026-08-31
 
 ### Added

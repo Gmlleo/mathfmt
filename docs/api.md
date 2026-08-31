@@ -18,6 +18,7 @@ and validate DOCX equations. The contract applies to names exported by
 | `formula_to_mathml(source, aliases=None)` | Parse one linear formula into MathML |
 | `mathml_to_omml(math, transform=None)` | Convert MathML with the built-in or supplied XSL backend |
 | `mathml_to_omml_py(math)` | Convert MathML with the cross-platform Python backend |
+| `omml_to_text(omath_elem)` | Convert a native ``m:oMath``/``m:oMathPara`` element back to MathFmt's linear formula syntax |
 | `scan_docx(input_path, report_path, alias_profile=None, *, recognizers=())` | Create a review report |
 | `apply_docx(input_path, review_path, output_path, result_path, xsl_path=None, *, ...)` | Apply a reviewed report |
 | `validate_docx(input_path, *, review_path=None, xsl_path=None, alias_profile=None, compatibility=None)` | Validate package, OMML, coverage, and compatibility |
@@ -25,7 +26,7 @@ and validate DOCX equations. The contract applies to names exported by
 | `load_alias_profile(path)` / `AliasProfile` | Load reproducible symbol aliases |
 | `load_recognizer(spec)` / `FormulaRecognizer` / `FormulaCandidate` | Extend candidate detection |
 | `check_for_updates(...)` / `UpdateInfo` | Query release information |
-| `FormulaError`, `RecognizerError`, `DocxSecurityError` | Catch supported failure categories |
+| `FormulaError`, `RecognizerError`, `DocxSecurityError`, `OmmlConversionError` | Catch supported failure categories |
 
 The exact exported-name list and call signatures are protected by
 `tests/test_public_api.py`. New optional keyword parameters and new exports may be

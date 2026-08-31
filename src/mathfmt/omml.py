@@ -278,3 +278,204 @@ def _matrix(elem: etree._Element, parent: etree._Element) -> None:
                 e = etree.SubElement(mr, qname(M_NS, "e"))
                 for cell_child in td:
                     _convert(cell_child, e)
+
+
+# -- Reverse direction: OMML -> MathFmt linear text -------------------------
+
+
+class OmmlConversionError(ValueError):
+    """Raised when an ``m:oMath`` element uses a construct ``omml_to_text`` cannot reverse."""
+
+
+_REVERSE_OPERATORS = {
+    "≠": "!=",
+    "≤": "<=",
+    "≥": ">=",
+    "→": "->",
+    "⇒": "=>",
+    "±": "+/-",
+}
+
+_LIM_ARROW_BASES = {"->", "=>", "⇌"}  # `_reverse_operators` already ASCII-ifies → and ⇒
+
+_PASSTHROUGH_CONTAINERS = {"oMath", "oMathPara"}
+
+
+def omml_to_text(omath_elem: etree._Element) -> str:
+    """Convert a native ``m:oMath``/``m:oMathPara`` element back to MathFmt's
+    linear formula syntax — the reverse of :func:`mathml_to_omml_py`.
+
+    Supports the constructs MathFmt's own OMML output uses: text runs, fractions
+    (including derivative and partial-derivative fractions), radicals,
+    super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket,
+    vectors), and limits / annotated reaction arrows. Constructs this converter
+    does not reverse — matrices, piecewise/cases tables, and n-ary operators —
+    raise :class:`OmmlConversionError` naming the unsupported element instead of
+    guessing at a wrong answer.
+
+    The result re-parses (via :func:`formula_to_mathml <mathfmt.core.formula_to_mathml>`)
+    to an equivalent formula, not necessarily byte-identical input text — for
+    example, both ``2*x`` and ``2x`` round-trip to ``2x``. Chemistry formulas and
+    reactions are one specific case of this: they reconstruct with the same
+    digits, subscripts, and arrows, but as ordinary algebra rather than through
+    MathFmt's dedicated chemistry grammar, so the element symbols come back in
+    italic math styling instead of chemistry's upright styling.
+    """
+    tag = etree.QName(omath_elem).localname
+    if tag not in _PASSTHROUGH_CONTAINERS:
+        raise OmmlConversionError(f"Expected m:oMath or m:oMathPara, got m:{tag}")
+    return _emit_children(omath_elem)
+
+
+def _emit_children(elem: etree._Element) -> str:
+    return _join_emitted(list(elem))
+
+
+def _join_emitted(children: list[etree._Element]) -> str:
+    """Concatenate each child's emitted text, inserting ``*`` at any boundary
+    where the tokenizer would otherwise merge two atoms into one identifier or
+    number (e.g. adjacent runs ``d`` and ``s`` reconstructing as ``ds`` instead
+    of ``d`` times ``s``). An explicit ``*`` is semantically identical to the
+    implicit multiplication it replaces, so this is always safe, even where
+    unnecessary.
+    """
+    result = ""
+    for child in children:
+        fragment = _emit(child)
+        if result and fragment and result[-1].isalnum() and fragment[0].isalnum():
+            result += "*"
+        result += fragment
+    return result
+
+
+def _emit(elem: etree._Element) -> str:
+    tag = etree.QName(elem).localname
+    if tag in _PASSTHROUGH_CONTAINERS:
+        return _emit_children(elem)
+    if tag == "r":
+        return _reverse_operators(_run_text(elem))
+    if tag == "f":
+        return _emit_fraction(elem)
+    if tag == "rad":
+        deg = _find(elem, "deg")
+        if deg is not None and len(deg) > 0:
+            raise OmmlConversionError("omml_to_text does not support nth-root radicals")
+        return "sqrt(" + _emit_children(_require(elem, "e")) + ")"
+    if tag == "sSup":
+        return _emit_operand(_find(elem, "e")) + "^" + _emit_operand(_find(elem, "sup"))
+    if tag == "sSub":
+        return _emit_operand(_find(elem, "e")) + "_" + _emit_operand(_find(elem, "sub"))
+    if tag == "sSubSup":
+        return (
+            _emit_operand(_find(elem, "e"))
+            + "_"
+            + _emit_operand(_find(elem, "sub"))
+            + "^"
+            + _emit_operand(_find(elem, "sup"))
+        )
+    if tag == "d":
+        beg, end = _delimiter_chars(elem)
+        return beg + _emit_children(_require(elem, "e")) + end
+    if tag in {"limLow", "limUpp"}:
+        return _emit_limit(elem)
+    raise OmmlConversionError(f"omml_to_text does not support m:{tag} elements")
+
+
+def _run_text(elem: etree._Element) -> str:
+    t = elem.find(qname(M_NS, "t"))
+    return (t.text or "") if t is not None else ""
+
+
+def _find(elem: etree._Element, name: str) -> etree._Element | None:
+    return elem.find(qname(M_NS, name))
+
+
+def _require(elem: etree._Element, name: str) -> etree._Element:
+    found = _find(elem, name)
+    if found is None:
+        raise OmmlConversionError(f"m:{etree.QName(elem).localname} is missing its m:{name} child")
+    return found
+
+
+_PARTIAL_SYMBOL = "∂"
+
+
+def _emit_fraction(elem: etree._Element) -> str:
+    """Reconstruct ``m:f`` as ``num/den`` — except a partial derivative.
+
+    A partial derivative's numerator/denominator each start with a literal
+    ``∂`` run (see ``docs/formula-syntax.md``'s physics notation table). ``∂``
+    is only ever accepted by the tokenizer through the dedicated
+    ``partial(f, x)`` call syntax or an *unparenthesized* ``∂f/∂x`` — and every
+    other fraction operand here needs parentheses for correct precedence — so
+    that case must use the explicit call form instead of generic division.
+    """
+    num, den = _find(elem, "num"), _find(elem, "den")
+    partial_num = _strip_partial_symbol(num)
+    partial_den = _strip_partial_symbol(den)
+    if partial_num is not None and partial_den is not None:
+        return f"partial({partial_num},{partial_den})"
+    return _emit_operand(num) + "/" + _emit_operand(den)
+
+
+def _strip_partial_symbol(container: etree._Element | None) -> str | None:
+    """Return the container's text with a leading ``∂`` run removed, or None."""
+    if container is None or len(container) == 0:
+        return None
+    first = container[0]
+    if etree.QName(first).localname != "r" or _run_text(first) != _PARTIAL_SYMBOL:
+        return None
+    return _join_emitted(list(container)[1:])
+
+
+def _emit_operand(elem: etree._Element | None) -> str:
+    """Emit a fraction/script operand, parenthesizing it unless atomic.
+
+    Always-safe rather than minimal: the reconstructed text is a flat string
+    that must respect ASCII operator precedence on its own — there is no
+    structural nesting left to fall back on the way there is in OMML/MathML —
+    so anything beyond a single identifier or number run is grouped.
+    """
+    if elem is None or len(elem) == 0:
+        return ""
+    if len(elem) == 1 and etree.QName(elem[0]).localname == "r":
+        return _emit(elem[0])
+    return "(" + _emit_children(elem) + ")"
+
+
+def _delimiter_chars(elem: etree._Element) -> tuple[str, str]:
+    d_pr = _find(elem, "dPr")
+    beg, end = "(", ")"
+    if d_pr is not None:
+        beg_chr = _find(d_pr, "begChr")
+        end_chr = _find(d_pr, "endChr")
+        if beg_chr is not None:
+            beg = beg_chr.get(qname(M_NS, "val"), beg)
+        if end_chr is not None:
+            end = end_chr.get(qname(M_NS, "val"), end)
+    return beg, end
+
+
+def _emit_limit(elem: etree._Element) -> str:
+    """``limLow``/``limUpp`` represent two unrelated MathFmt constructs that
+    happen to share one OMML shape: the ``lim`` function, and an annotated
+    reaction arrow (``=>[heat]``). Disambiguate on the base text rather than
+    guessing which one was meant.
+    """
+    base = _emit_children(_require(elem, "e"))
+    annotation = _emit_children(_require(elem, "lim"))
+    if base.strip() == "lim":
+        return f"lim({annotation})"
+    if base in _LIM_ARROW_BASES:
+        return f"{base}[{annotation}]"
+    raise OmmlConversionError(
+        f"omml_to_text only supports m:limLow/m:limUpp for 'lim(...)' or an annotated "
+        f"reaction arrow, got base {base!r}"
+    )
+
+
+def _reverse_operators(text: str) -> str:
+    for symbol, ascii_form in _REVERSE_OPERATORS.items():
+        if symbol in text:
+            text = text.replace(symbol, ascii_form)
+    return text
