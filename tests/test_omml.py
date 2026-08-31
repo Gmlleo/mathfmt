@@ -301,12 +301,13 @@ def reparsed_omath(source: str) -> etree._Element:
         "x => y",
         "2 +/- 3",
         "lim(x->0) sin(x)/x",
+        "H2O",
+        "Ca(OH)2",
+        "2H2 + O2 -> 2H2O",
+        "CaCO3 =>[heat] CaO + CO2",
     ],
 )
 def test_omml_to_text_round_trips_to_an_equivalent_tree(source: str) -> None:
-    # Chemistry formulas/reactions are covered separately below: they reconstruct
-    # to an equivalent but not byte-identical tree (see the omml_to_text
-    # docstring), so they're excluded from this strict-equality parametrization.
     original = omath_for(source)
     reconstructed = reparsed_omath(source)
     assert etree.tostring(reconstructed) == etree.tostring(original)
@@ -318,6 +319,13 @@ def test_omml_to_text_multiplication_boundary_is_disambiguated() -> None:
     text = omml_to_text(omath_for("ds(t)/dt"))
     assert "d*s" in text
     assert "d*t" in text
+
+
+def test_omml_to_text_digit_then_letter_boundary_needs_no_star() -> None:
+    # Unlike letter-then-letter, a digit followed by a letter is never
+    # ambiguous to the tokenizer (NUMBER stops at the first non-digit), so the
+    # ordinary coefficient shorthand round-trips without an inserted "*".
+    assert omml_to_text(omath_for("2x")) == "2x"
 
 
 def test_omml_to_text_rejects_matrix_and_piecewise() -> None:
@@ -365,18 +373,37 @@ def test_omml_to_text_rejects_unrecognized_lim_base() -> None:
         omml_to_text(omath)
 
 
-def test_omml_to_text_chemistry_reconstructs_without_crashing() -> None:
-    # Chemistry formulas lose their dedicated upright styling on the way back
-    # (see the omml_to_text docstring) but must still produce valid, re-parsable
-    # text with the same digits, subscripts, and arrows.
-    text = omml_to_text(omath_for("2H2 + O2 -> 2H2O"))
-    reparsed = omath_for(text)
-    subscripts = [t.text for t in reparsed.xpath(".//m:sSub/m:sub//m:t", namespaces={"m": M_NS})]
-    assert subscripts == ["2", "2", "2"]
-    assert "->" in text or "→" in "".join(reparsed.itertext())
+@pytest.mark.parametrize(
+    ("source", "expected_text"),
+    [
+        ("H2O", "H2O"),
+        ("Ca(OH)2", "Ca(OH)2"),
+        ("2H2 + O2 -> 2H2O", "2H2+O2->2H2O"),
+    ],
+)
+def test_omml_to_text_chemistry_reconstructs_in_bare_form(source: str, expected_text: str) -> None:
+    # A chemistry element/count reconstructs without an underscore (H2, not
+    # H_2) so it re-triggers the chemistry grammar on reparse and keeps its
+    # upright styling, rather than falling back to an italic generic subscript.
+    assert omml_to_text(omath_for(source)) == expected_text
 
 
-def test_omml_to_text_annotated_reaction_arrow_reconstructs_without_crashing() -> None:
-    text = omml_to_text(omath_for("CaCO3 =>[heat] CaO + CO2"))
-    reparsed = omath_for(text)  # must not raise
-    assert "heat" in "".join(reparsed.itertext())
+def test_omml_to_text_non_chemistry_group_subscript_still_uses_underscore() -> None:
+    # `_is_chemistry_group` must not fire for an ordinary (non-upright) group,
+    # only for the plain/upright-styled runs MathFmt's chemistry grammar
+    # produces — otherwise a genuine grouped-expression subscript would lose
+    # its `_` and silently reparse as multiplication instead.
+    omath = etree.Element(qname(M_NS, "oMath"))
+    ssub = etree.SubElement(omath, qname(M_NS, "sSub"))
+    base = etree.SubElement(ssub, qname(M_NS, "e"))
+    group = etree.SubElement(base, qname(M_NS, "d"))
+    group_e = etree.SubElement(group, qname(M_NS, "e"))
+    run = etree.SubElement(group_e, qname(M_NS, "r"))  # no rPr/sty -> not chemistry-plain
+    etree.SubElement(run, qname(M_NS, "t")).text = "a"
+    sub = etree.SubElement(ssub, qname(M_NS, "sub"))
+    sub_run = etree.SubElement(sub, qname(M_NS, "r"))
+    etree.SubElement(sub_run, qname(M_NS, "t")).text = "2"
+
+    # `_emit_operand` also over-parenthesizes any non-atomic operand (see its
+    # docstring), so the non-chemistry fallback doubles the group's own parens.
+    assert omml_to_text(omath) == "((a))_2"

@@ -482,7 +482,10 @@ reconstructs with an explicit `_` (`p_1` rather than the bare `p1` shorthand).
 Supported: numbers, identifiers, operators and relations, fractions (including
 derivative and partial-derivative fractions, via `d`/`∂` detection), radicals,
 super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket
-delimiters, vectors), and `lim(...)` / annotated reaction arrows (`=>[heat]`).
+delimiters, vectors), `lim(...)` / annotated reaction arrows (`=>[heat]`), and
+chemistry formulas and reactions (`H2O`, `(OH)2`, `2H2 + O2 -> 2H2O`) — these
+reconstruct in their original bare form so they re-parse through MathFmt's
+dedicated chemistry grammar rather than as a generic subscript.
 
 Not supported — `OmmlConversionError` is raised naming the element rather than
 guessing at a wrong answer:
@@ -491,8 +494,3 @@ guessing at a wrong answer:
 - N-ary operators (`m:nary`) and other elements outside the list above
 - Nth-root radicals (MathFmt's own input grammar has no nth-root syntax, so this
   can only occur on hand-authored OMML)
-
-Chemistry formulas and reactions are a special case worth calling out: they
-reconstruct correctly (same digits, subscripts, arrows) but as ordinary algebra
-rather than through the dedicated chemistry grammar, so element symbols come back
-in italic math styling instead of chemistry's upright styling.
