@@ -13,7 +13,7 @@ MathFmt is a Python CLI tool & library that converts plain-text math formulas (e
 - **Author:** Leo (gml853503962@gmail.com)
 - **Version:** 1.1.0 (see `src/mathfmt/_version.py`)
 - **License:** MIT
-- **Repo:** https://github.com/gml853503962-creator/mathfmt
+- **Repo:** https://github.com/Gmlleo/mathfmt
 - **Python:** 3.10–3.14 (pure Python, no native extensions)
 - **Sole runtime dependency:** `lxml >= 5.0`
 - **Dev dependencies:** `build`, `pytest`, `pytest-cov`, `ruff`
