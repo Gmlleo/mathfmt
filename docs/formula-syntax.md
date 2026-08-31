@@ -467,3 +467,32 @@ See `skills/mathfmt/references/paper-notation.md` for the notation conventions M
 - Standard mathematical operator glyphs (`±`, `≠`, `≤`, `≥`, `→`, `∞`, `Δ`, `π`)
 - Invisible multiplication for coefficient-variable products
 - Top-level `+`/`-` splitting for long table formulas
+
+---
+
+## 9. Reverse Conversion: OMML → Text
+
+`omml_to_text(omath_elem)` (in `mathfmt.omml`) does the reverse of section 4's
+mapping: given a native `m:oMath`/`m:oMathPara` element, it reconstructs a linear
+string that re-parses to an equivalent formula through `formula_to_mathml`. It is
+not guaranteed to reproduce the exact original input text — only an equivalent
+one — for example, both `2*x` and `2x` reconstruct as `2x`, and a subscript always
+reconstructs with an explicit `_` (`p_1` rather than the bare `p1` shorthand).
+
+Supported: numbers, identifiers, operators and relations, fractions (including
+derivative and partial-derivative fractions, via `d`/`∂` detection), radicals,
+super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket
+delimiters, vectors), and `lim(...)` / annotated reaction arrows (`=>[heat]`).
+
+Not supported — `OmmlConversionError` is raised naming the element rather than
+guessing at a wrong answer:
+
+- Matrices and piecewise/`cases` tables (native OMML `m:m`)
+- N-ary operators (`m:nary`) and other elements outside the list above
+- Nth-root radicals (MathFmt's own input grammar has no nth-root syntax, so this
+  can only occur on hand-authored OMML)
+
+Chemistry formulas and reactions are a special case worth calling out: they
+reconstruct correctly (same digits, subscripts, arrows) but as ordinary algebra
+rather than through the dedicated chemistry grammar, so element symbols come back
+in italic math styling instead of chemistry's upright styling.

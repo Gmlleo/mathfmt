@@ -41,16 +41,24 @@ mathfmt gui
 ```
 
 This starts a local server bound to `127.0.0.1` and opens the page in your default
-browser. Drag a `.docx` onto the drop zone (or click it to choose a file), pick a
-confidence level if you want something other than the conservative default, and
-download the converted document plus its JSON scan report from the page. Nothing is
-uploaded anywhere — the server only listens on localhost, and each upload is
-processed in a private temporary directory that is cleaned up automatically. Press
-Ctrl+C in the terminal to stop the server.
+browser. Drag a `.docx` onto the drop zone (or click it to choose a file) and the
+page scans it, then shows every detected formula candidate as a checklist — each
+row shows the original text, its confidence level, and (for anything MathFmt could
+not parse) the reason. Candidates are pre-checked using the same conservative
+default as `mathfmt convert` (high confidence only); use the preset buttons
+("仅高置信度" / "中及以上" / "全部候选" / "全不选") or click individual checkboxes to
+change the selection before converting. Click "转换所选" to apply, then download the
+converted document and its JSON scan report from the page. Nothing is uploaded
+anywhere — the server only listens on localhost, and each upload is processed in a
+private temporary directory that is cleaned up automatically. Press Ctrl+C in the
+terminal to stop the server.
 
-`mathfmt gui` mirrors `mathfmt convert`'s conservative one-step pipeline (see
-section 4 below). For batch processing, custom aliases, custom recognizers, or the
-full review-before-apply workflow, use the CLI commands in the rest of this guide.
+`mathfmt gui` gives you the review step of section 3 below without leaving the
+browser. For batch processing, custom aliases, or custom recognizers, use the CLI
+commands in the rest of this guide.
+
+Don't want to install Python at all? See [`packaging/README.md`](../packaging/README.md)
+for building a standalone double-clickable GUI executable.
 
 ---
 
@@ -161,7 +169,7 @@ Open `candidates.json` and for each candidate:
 | `linear` | The formula string that will be parsed (edit this to fix notation, e.g. change `p1,2` to `p1, p2` if you prefer comma-separated subscripts) |
 | `selected` | Set to `true` to convert, `false` to skip |
 | `parse_status` | `"ok"` = parsable; `"review"` = failed, check `parse_error` |
-| `parse_error_details` | Structured parse location: column, nearby context, expected token, and found token when available |
+| `parse_error_details` | Structured parse location: column, nearby context, expected token, found token, and (for recognized mistakes) a plain-language `hint` suggesting a fix |
 | `explicit` | `true` when detected from `$...$` or `$$...$$` delimiters |
 | `chemistry` | `true` when the conservative chemistry parser recognized the candidate |
 | `chemistry_kind` | `"formula"`, `"reaction"`, or `null` |

@@ -65,6 +65,28 @@ def test_formula_error_reports_column_context_and_expected_token() -> None:
     assert "Expected formula atom" in details["message"]
     assert details["expected"] == "number, identifier, function, matrix, or grouped expression"
     assert details["context"] == "x +"
+    assert "operand is missing" in details["hint"]
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_snippet"),
+    [
+        ("(x]", "mismatched bracket"),
+        ("cases(x^2; -x if x<0)", "missing 'if'"),
+    ],
+)
+def test_formula_error_hint_covers_common_mistakes(source: str, expected_snippet: str) -> None:
+    with pytest.raises(FormulaError) as exc_info:
+        formula_to_mathml(source)
+
+    hint = exc_info.value.to_dict().get("hint")
+    assert hint is not None
+    assert expected_snippet in hint
+
+
+def test_formula_error_hint_is_absent_for_unrecognized_expected() -> None:
+    error = FormulaError("made up error", expected="some internal token kind")
+    assert "hint" not in error.to_dict()
 
 
 def test_tokenizer_accepts_trailing_space_and_rejects_unknown_text() -> None:

@@ -4,7 +4,7 @@ import pytest
 from lxml import etree
 
 from mathfmt.core import M_NS, formula_to_mathml, qname
-from mathfmt.omml import XML_NS, combine_equation_array, mathml_to_omml_py
+from mathfmt.omml import XML_NS, OmmlConversionError, combine_equation_array, mathml_to_omml_py, omml_to_text
 
 
 def omath_for(source: str) -> etree._Element:
@@ -266,3 +266,117 @@ def test_function_application_has_delimiters() -> None:
 def test_nested_fraction() -> None:
     omath = omath_for("a/(b/c)")
     assert len(omath.xpath(".//m:f", namespaces={"m": M_NS})) == 2
+
+
+# -- omml_to_text: reverse direction -------------------------------------------
+
+
+def reparsed_omath(source: str) -> etree._Element:
+    """Round-trip source through omml_to_text and back to an OMML tree."""
+    text = omml_to_text(omath_for(source))
+    return omath_for(text)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "x^2 + 1 = 2",
+        "a/(b+c)",
+        "(a+b)/(c-d)",
+        "sqrt(x^2+1)",
+        "x^2",
+        "p1",
+        "T_i^j",
+        "x^(a+b)",
+        "ds(t)/dt",
+        "d^2s(t)/dt^2",
+        "partial(f,x)",
+        "bra(phi) ket(psi)",
+        "(a+b)*c",
+        "[1,2,3]",
+        "x != y",
+        "x <= 2",
+        "x >= 2",
+        "x -> y",
+        "x => y",
+        "2 +/- 3",
+        "lim(x->0) sin(x)/x",
+    ],
+)
+def test_omml_to_text_round_trips_to_an_equivalent_tree(source: str) -> None:
+    # Chemistry formulas/reactions are covered separately below: they reconstruct
+    # to an equivalent but not byte-identical tree (see the omml_to_text
+    # docstring), so they're excluded from this strict-equality parametrization.
+    original = omath_for(source)
+    reconstructed = reparsed_omath(source)
+    assert etree.tostring(reconstructed) == etree.tostring(original)
+
+
+def test_omml_to_text_multiplication_boundary_is_disambiguated() -> None:
+    # Two adjacent bare-identifier runs ("d" then "s(...)") must not merge into
+    # one longer identifier ("ds") on reparse.
+    text = omml_to_text(omath_for("ds(t)/dt"))
+    assert "d*s" in text
+    assert "d*t" in text
+
+
+def test_omml_to_text_rejects_matrix_and_piecewise() -> None:
+    with pytest.raises(OmmlConversionError, match="m:m"):
+        omml_to_text(omath_for("cases(x^2 if x>=0; -x if x<0)"))
+
+
+def test_omml_to_text_rejects_non_omath_root() -> None:
+    with pytest.raises(OmmlConversionError, match="oMath"):
+        omml_to_text(etree.Element(qname(M_NS, "r")))
+
+
+def test_omml_to_text_rejects_unknown_element() -> None:
+    omath = etree.Element(qname(M_NS, "oMath"))
+    etree.SubElement(omath, qname(M_NS, "nary"))
+    with pytest.raises(OmmlConversionError, match="m:nary"):
+        omml_to_text(omath)
+
+
+def test_omml_to_text_rejects_nth_root() -> None:
+    omath = etree.Element(qname(M_NS, "oMath"))
+    rad = etree.SubElement(omath, qname(M_NS, "rad"))
+    deg = etree.SubElement(rad, qname(M_NS, "deg"))
+    deg_run = etree.SubElement(deg, qname(M_NS, "r"))
+    etree.SubElement(deg_run, qname(M_NS, "t")).text = "3"
+    e = etree.SubElement(rad, qname(M_NS, "e"))
+    e_run = etree.SubElement(e, qname(M_NS, "r"))
+    etree.SubElement(e_run, qname(M_NS, "t")).text = "x"
+
+    with pytest.raises(OmmlConversionError, match="nth-root"):
+        omml_to_text(omath)
+
+
+def test_omml_to_text_rejects_unrecognized_lim_base() -> None:
+    omath = etree.Element(qname(M_NS, "oMath"))
+    lim_low = etree.SubElement(omath, qname(M_NS, "limLow"))
+    e = etree.SubElement(lim_low, qname(M_NS, "e"))
+    e_run = etree.SubElement(e, qname(M_NS, "r"))
+    etree.SubElement(e_run, qname(M_NS, "t")).text = "max"  # not "lim" or an arrow
+    lim = etree.SubElement(lim_low, qname(M_NS, "lim"))
+    lim_run = etree.SubElement(lim, qname(M_NS, "r"))
+    etree.SubElement(lim_run, qname(M_NS, "t")).text = "x->0"
+
+    with pytest.raises(OmmlConversionError, match="limLow"):
+        omml_to_text(omath)
+
+
+def test_omml_to_text_chemistry_reconstructs_without_crashing() -> None:
+    # Chemistry formulas lose their dedicated upright styling on the way back
+    # (see the omml_to_text docstring) but must still produce valid, re-parsable
+    # text with the same digits, subscripts, and arrows.
+    text = omml_to_text(omath_for("2H2 + O2 -> 2H2O"))
+    reparsed = omath_for(text)
+    subscripts = [t.text for t in reparsed.xpath(".//m:sSub/m:sub//m:t", namespaces={"m": M_NS})]
+    assert subscripts == ["2", "2", "2"]
+    assert "->" in text or "→" in "".join(reparsed.itertext())
+
+
+def test_omml_to_text_annotated_reaction_arrow_reconstructs_without_crashing() -> None:
+    text = omml_to_text(omath_for("CaCO3 =>[heat] CaO + CO2"))
+    reparsed = omath_for(text)  # must not raise
+    assert "heat" in "".join(reparsed.itertext())

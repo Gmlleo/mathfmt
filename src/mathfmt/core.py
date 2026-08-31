@@ -317,7 +317,48 @@ class FormulaError(ValueError):
             start = max(0, (self.position or 0) - 12)
             end = min(len(self.source), (self.position or 0) + 12)
             details["context"] = self.source[start:end]
+        hint = _suggest_fix(self.expected, self.found, str(self))
+        if hint:
+            details["hint"] = hint
         return details
+
+
+def _suggest_fix(expected: str | None, found: str | None, message: str) -> str | None:
+    """Best-effort, human-readable suggestion for a recognized FormulaError shape.
+
+    Matches on the same literal ``expected`` strings the parser already raises
+    (see the ``FormulaError(..., expected=...)`` call sites above); an
+    unrecognized or dynamic ``expected`` value yields no hint rather than a
+    guess, so this never contradicts the actual error.
+    """
+    del found  # not currently distinguishing on `found`, kept for future rules
+    if not expected:
+        return None
+    if expected in {")", "]", "}", "(", "[", "{"}:
+        return "Check for a missing or mismatched bracket — every '(', '[', '{' needs a matching closer."
+    if expected == "if":
+        return "Each cases()/{...} branch needs the form 'value if condition' — add the missing 'if'."
+    if expected == "condition":
+        return "Add a condition after 'if' in this branch, e.g. 'x if x>=0'."
+    if expected == "; or )":
+        return "Separate cases/piecewise branches with ';' and close the group with ')'."
+    if expected in {"branch expression", "expression, condition"}:
+        return "Each cases()/{...} branch needs an expression before 'if', e.g. 'x^2 if x>=0'."
+    if "comma-separated argument" in expected:
+        return "Check the comma count against the required argument list: " + expected + "."
+    if expected == "end of formula":
+        return "There is extra text after a complete formula — remove it or split into two formulas."
+    if expected == "chemical element or parenthesized chemical group":
+        return "Check element symbols and capitalization in the chemical formula, e.g. 'Na' not 'NA'."
+    if expected == "chemical formula":
+        return "Each side of the reaction arrow needs at least one recognizable chemical formula."
+    if expected == "one reaction arrow":
+        return "A single reaction may only use one arrow (->, <->, or =>); split multi-arrow text into separate formulas."
+    if expected == "]] or ,":
+        return "Separate matrix entries with ',' and rows with ';', closing the matrix with ']]'."
+    if expected.startswith("number, identifier"):
+        return "An operand is missing here — check for a stray operator, empty group, or unsupported symbol."
+    return None
 
 
 TOKEN_RE = re.compile(

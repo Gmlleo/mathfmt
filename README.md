@@ -33,15 +33,16 @@ Requirements: Python 3.10–3.14. The only runtime dependency is `lxml`.
 mathfmt gui
 ```
 
-Opens a local page in your browser — drag a `.docx` onto it (or click to choose one)
-and download the converted file. No other commands needed. Everything runs on
+Opens a local page in your browser — drag a `.docx` onto it (or click to choose one),
+check off which detected formulas to convert (sensible defaults are pre-checked),
+then download the converted file. No other commands needed. Everything runs on
 `127.0.0.1`; files never leave the machine.
 
 ```bash
 mathfmt gui
 ```
 
-在浏览器打开一个本地页面——把 `.docx` 拖进去（或点击选择文件），下载转换好的文件即可，不需要再输入别的命令。只监听
+在浏览器打开一个本地页面——把 `.docx` 拖进去（或点击选择文件），勾选要转换的公式（已按合理的默认值预先勾选好），下载转换好的文件即可，不需要再输入别的命令。只监听
 `127.0.0.1`，文件不会离开这台电脑。
 
 ### Check your environment · 检查环境
