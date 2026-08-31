@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # MathFmt — Project Reference for Claude Code
 
 > Typeset plain-text formulas in DOCX files as native Word OMML equations — cross-platform, no Office required.
@@ -20,46 +24,51 @@ MathFmt is a Python CLI tool & library that converts plain-text math formulas (e
 
 ```
 MathFmt/
-├── src/mathfmt/           # Package source (11 files)
+├── src/mathfmt/           # Package source
 │   ├── __init__.py        # Stable public API exports (18 symbols)
 │   ├── _version.py        # Single version source: "1.0.0"
 │   ├── __main__.py        # `python -m mathfmt` entry point
-│   ├── cli.py             # argparse CLI: 6 subcommands
+│   ├── cli.py             # argparse CLI: 7 subcommands (~570 lines)
+│   ├── gui.py              # mathfmt gui: stdlib-only local browser drag-and-drop server
 │   ├── aliases.py         # Validated user symbol-alias profiles
-│   ├── core.py            # Formula parser, scanner, and conversion pipeline
+│   ├── core.py            # Formula parser, scanner, and conversion pipeline (~2200 lines — the engine)
 │   ├── docxio.py          # Bounded ZIP I/O and hardened OOXML parsing
 │   ├── omml.py            # Pure-Python MathML→OMML converter
 │   ├── plugins.py         # Stable custom-recognizer extension API
 │   ├── update.py          # Self-update checker (GitHub Releases API)
-│   └── validate.py        # Multi-layer DOCX/OMML validator
+│   └── validate.py        # Multi-layer DOCX/OMML validator (~500 lines)
 ├── tests/                 # pytest unit and acceptance suite
 │   ├── helpers.py         # Synthetic DOCX builder, fake XSL, OMML template
-│   ├── test_cli.py, test_core.py, test_docx.py, test_formula.py
-│   ├── test_docxio.py, test_omml.py, test_skill.py, test_update.py, test_validate.py
+│   ├── fixtures/          # Static test fixtures
+│   ├── acceptance/        # gen_docs.py: builds versioned acceptance documents (doc01…doc06)
+│   ├── test_acceptance.py, test_aliases.py, test_benchmark.py, test_cli.py,
+│   │   test_core.py, test_docx.py, test_docxio.py, test_formula.py, test_gui.py,
+│   │   test_omml.py, test_plugins.py, test_public_api.py, test_skill.py,
+│   │   test_update.py, test_validate.py
 ├── docs/
 │   ├── formula-syntax.md  # Complete grammar reference, preprocessing, MathML mapping
 │   ├── workflow.md        # Install, scan/review/apply cycle, CI usage, troubleshooting
-│   ├── api.md             # 1.x stability and deprecation contract
+│   ├── api.md              # 1.x stability and deprecation contract
 │   ├── plugins.md         # Custom recognizer protocol and CLI loading
 │   └── performance.md     # 100-page benchmark and CI gate
-├── benchmarks/            # Reproducible large-DOCX performance workload
-├── skills/mathfmt/        # Claude Code skill
-│   ├── SKILL.md           # Skill workflow instructions
-│   ├── agents/openai.yaml # Agent interface
+├── benchmarks/             # Reproducible large-DOCX performance workload
+├── skills/mathfmt/         # Claude Code skill
+│   ├── SKILL.md            # Skill workflow instructions
+│   ├── agents/openai.yaml  # Agent interface
 │   └── references/paper-notation.md  # Design conventions
 ├── examples/
-│   └── README.md          # New-user walkthrough: test doc → scan → apply
-├── ROADMAP.md             # Release history and stable-maintenance status
+│   └── README.md           # New-user walkthrough: test doc → scan → apply
+├── ROADMAP.md               # Release history and stable-maintenance status
 ├── .github/workflows/
-│   ├── ci.yml             # CI: 9-version matrix + package/performance/render jobs
-│   └── publish.yml        # CD: tag → PyPI + GitHub Release
+│   ├── ci.yml               # CI: 9-version matrix + package/performance/render jobs
+│   └── publish.yml          # CD: tag → PyPI + GitHub Release
 ├── .claude/
-│   ├── memory.md          # Project lessons learned (5 items)
+│   ├── memory.md            # Project lessons learned (accumulated, see below)
 │   └── settings.local.json
-├── pyproject.toml         # Build config, metadata, tool settings
+├── pyproject.toml           # Build config, metadata, tool settings
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
-└── README.md              # Bilingual (zh/en) overview
+└── README.md                 # Bilingual (zh/en) overview
 ```
 
 ---
@@ -69,10 +78,12 @@ MathFmt/
 ### `core.py` — The engine
 The heart of the project. Data flow:
 1. **Preprocessing** — derivative normalization (`ds/dt` → Leibniz form), Unicode sub/superscript → ASCII, operator aliases
-2. **Tokenization** — regex-based lexer
+2. **Tokenization** — regex-based lexer. Grammar keywords that separate two expressions (e.g. `if` in `cases(...)` syntax) must be tokenized *before* the generic identifier rule, or implicit multiplication silently consumes them and swallows branch-level parse errors.
 3. **Parsing** — recursive-descent parser following the BNF grammar (see `docs/formula-syntax.md`)
 4. **AST → MathML** — tree walker builds `<math>` element tree
-5. **DOCX injection** — finds text runs matching formula spans, replaces with OMML markup, handles table multi-line splitting
+5. **DOCX injection** — finds text runs matching formula spans, replaces with OMML markup, handles table and multi-line/eqArr splitting
+
+A scan report distinguishes the original matched `source` text from the parser-ready `linear` text (delimiters like `$…$` stripped, etc.). `apply`, `validate`, and cross-backend checks must all parse `linear`, not `source` — otherwise formulas that convert successfully can still fail validation. When one reviewed candidate expands to multiple parse units (e.g. multi-line aligned formulas), split it consistently across scan, apply, and validation; keep coverage counts candidate-based and assemble the final layout only during apply.
 
 Key functions exported via `__init__.py`:
 - `scan_docx(input_path, report_path)` → writes JSON report, returns stats dict
@@ -87,16 +98,24 @@ Key functions exported via `__init__.py`:
 Pure Python, no Office required. Cross-platform default backend. Key function:
 - `mathml_to_omml_py(mathml_elem)` → OMML element tree
 
+A literal `&` inside an OMML `m:eqArr` acts as a Word alignment marker but renders visibly in other applications (e.g. LibreOffice). For cross-application relation alignment, a two-column native `m:m` (right-justified left column, left-justified relation column) is used instead; `m:eqArr` remains only the no-common-relation fallback.
+
 ### `cli.py` — Command-line interface
-Six subcommands via `argparse`:
+Seven subcommands via `argparse`:
 | Command | Purpose |
 |---|---|
 | `mathfmt scan` | Scan DOCX for formulas → JSON report |
 | `mathfmt apply` | Apply reviewed candidates → output DOCX |
 | `mathfmt convert` | One-step conservative conversion (scan + apply high-confidence only) |
-| `mathfmt validate` | Multi-layer offline validation |
+| `mathfmt gui` | Local browser drag-and-drop UI over the same convert pipeline (see `gui.py` below) |
+| `mathfmt validate` | Multi-layer offline validation (`--compatibility wps` selects the WPS lint; there is no `--wps` shorthand) |
 | `mathfmt doctor` | Environment diagnostics |
 | `mathfmt update` | Check for newer version on GitHub |
+
+Library functions return structured results; the CLI translates them to exit codes. When adding an error field to a library result, also add a CLI exit-code test for that path — displaying an error message while the process still exits 0 breaks CI callers silently.
+
+### `gui.py` — Local browser drag-and-drop server
+`mathfmt gui` starts a plain-stdlib `http.server` bound to `127.0.0.1`, serves one self-contained HTML/JS page, and drives the same `scan_docx` → confidence-filter → `apply_docx` pipeline as `convert`. Each upload gets a private per-request temp directory; a `_SessionStore` token maps to it for the `/download` and `/report` routes and sweeps entries after a TTL. `BaseHTTPRequestHandler.send_error`'s `message` argument becomes the HTTP status line and must stay ASCII (it's encoded latin-1 by the stdlib); pass non-ASCII text via the `explain=` keyword instead, which is UTF-8-encoded into the body.
 
 ### `validate.py` — Validator
 Five validation layers:
@@ -109,23 +128,30 @@ Five validation layers:
 ### `update.py` — Self-update checker
 - Polls GitHub Releases API
 - SemVer 2.0 parsing
-- 1-hour response caching
+- 1-hour response caching. Caches for option-sensitive checks (e.g. stable-only vs. prerelease) must include the option in the cache key, and decoded cache JSON must be validated as a mapping with usable value types before calling mapping methods on it.
 
 ---
 
 ## Development Commands
 
-All commands run from project root (`C:\Users\gml85\Desktop\MathFmt`).
+All commands run from the project root (`C:\Users\gml85\Desktop\个人\MathFmt`).
 
 ```powershell
-# Install in editable mode with dev deps
+# Install in editable mode with dev deps — REQUIRED before running tests or the CLI locally.
+# Without -e, `python -c "import mathfmt"` / a bare `mathfmt` on PATH can silently resolve to a
+# stale, non-editable version already present in site-packages instead of this checkout.
 pip install -e ".[dev]"
 
-# Run tests (coverage threshold: 85%)
-pytest
+# Run the full test suite (coverage threshold: 85%, matches CI)
+pytest -m "not native_xsl"
 
-# Lint (same as CI)
+# Run a single test file / test
+pytest tests/test_core.py
+pytest tests/test_core.py::test_specific_case -v
+
+# Lint + format check (both run in CI; run both before tagging a release)
 ruff check .
+ruff format --check .
 
 # Build distribution
 python -m build
@@ -136,20 +162,21 @@ mathfmt convert input.docx --output output.docx
 ```
 
 **Pytest notes:**
-- Markers: `native_xsl` tests require Microsoft Office — skip on non-Windows or non-Office machines
-- Coverage: branch coverage, 85% threshold, HTML report in `htmlcov/`
-- If `WinError 5` on Windows, use a fresh `--basetemp` (known issue, see `.claude/memory.md`)
+- Markers: `native_xsl` tests require Microsoft Office — CI runs them only on Windows; skip locally on non-Windows or non-Office machines (`pytest -m "not native_xsl"`).
+- Coverage: branch coverage, 85% threshold enforced by `pyproject.toml` `addopts`, HTML report in `htmlcov/`. A targeted/single-file run still inherits this repo-wide threshold and can exit nonzero on coverage alone even when every selected test passes — use the full suite for release validation, and don't mistake a subset-coverage failure for a product defect.
+- If `WinError 5` on Windows, use a fresh, uniquely named `--basetemp` (a fixed one can become undeletable after an interrupted/sandboxed run).
+- Acceptance/render documents are generated via `tests/acceptance/gen_docs.py`; only `all_docs()` auto-creates its `OUT` directory — redirecting `gen_docs.OUT` to call a single document factory directly requires creating that directory first.
 
 ---
 
 ## Coding Conventions
 
 - **Line length:** 110 (configured in `pyproject.toml` `[tool.ruff]`)
-- **Linter:** ruff with rules `F` (Pyflakes), `I` (isort), `UP` (pyupgrade)
+- **Linter:** ruff with rules `F` (Pyflakes), `I` (isort), `UP` (pyupgrade), plus `ruff format --check`
 - **Imports:** `from __future__ import annotations` at top of each module
 - **Typing:** type hints used throughout, `collections.abc.Sequence` not `typing.Sequence`
 - **Docstrings:** Google-style or concise single-line
-- **Error handling:** library functions return structured results; CLI translates to exit codes (both must be correct — see memory.md lesson 4)
+- **Error handling:** library functions return structured results; CLI translates to exit codes (both must be correct — see `core.py`/`cli.py` note above)
 - **No `if __name__ == "__main__":`** in library code (excluded from coverage)
 - **Package layout:** `src/` layout with `pyproject.toml` `[tool.setuptools.package-dir] = {"" = "src"}`
 
@@ -166,18 +193,14 @@ When available, the Office XSL backend generally produces output closer to Word'
 
 ## CI/CD
 
-- **CI** (`.github/workflows/ci.yml`): Triggers on push/PR. Tests Windows 3.10–3.14 plus Ubuntu/macOS 3.10 and 3.14, then runs package, 100-page performance, native-XSL, and LibreOffice render gates.
-- **CD** (`.github/workflows/publish.yml`): Triggers on tag push `v*`. Builds → publishes to PyPI via Trusted Publishing → creates GitHub Release.
+- **CI** (`.github/workflows/ci.yml`): Triggers on push/PR. Runs `ruff check .` and `ruff format --check .`, then tests Windows 3.10–3.14 plus Ubuntu/macOS 3.10 and 3.14 (`native_xsl` tests only on Windows), then runs `package`, 100-page `performance`, and `libreoffice-render` gates.
+- **CD** (`.github/workflows/publish.yml`): Triggers on tag push `v*`. Builds → publishes to PyPI via Trusted Publishing → creates GitHub Release. After publishing, verify the PyPI wheel's SHA-256 matches the GitHub Release asset digest.
 
 ---
 
-## Key Project Knowledge (from `.claude/memory.md`)
+## Key Project Knowledge
 
-1. Windows pytest `--basetemp` can become undeletable after sandboxed runs → use fresh temp dir
-2. Always run `ruff check .` before tagging a release
-3. Option-sensitive caches must include the option in the cache key
-4. Always test CLI exit code alongside error messages — displaying error + exit 0 breaks CI
-5. Validate JSON cache root type before calling mapping methods
+`.claude/memory.md` accumulates specific lessons learned during development (Windows tooling quirks, release/QA procedures, OOXML edge cases, etc.) — read it directly for the full, current list. A few of the most broadly relevant ones are folded into the sections above (formula `source` vs. `linear`, grammar keyword tokenization order, `m:eqArr` vs. native `m:m` alignment, pytest coverage/basetemp behavior, CLI exit codes). Consult the file itself rather than relying on any static summary here, since it grows with the project.
 
 ---
 
@@ -190,3 +213,4 @@ When available, the Office XSL backend generally produces output closer to Word'
 - Design conventions: `skills/mathfmt/references/paper-notation.md`
 - Claude Code skill: `skills/mathfmt/SKILL.md`
 - Changelog: `CHANGELOG.md`
+- Lessons learned: `.claude/memory.md`

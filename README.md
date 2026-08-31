@@ -27,6 +27,23 @@ pip install mathfmt
 
 Requirements: Python 3.10–3.14. The only runtime dependency is `lxml`.
 
+### Prefer a GUI? · 想用图形界面？
+
+```bash
+mathfmt gui
+```
+
+Opens a local page in your browser — drag a `.docx` onto it (or click to choose one)
+and download the converted file. No other commands needed. Everything runs on
+`127.0.0.1`; files never leave the machine.
+
+```bash
+mathfmt gui
+```
+
+在浏览器打开一个本地页面——把 `.docx` 拖进去（或点击选择文件），下载转换好的文件即可，不需要再输入别的命令。只监听
+`127.0.0.1`，文件不会离开这台电脑。
+
 ### Check your environment · 检查环境
 
 ```bash
@@ -159,6 +176,7 @@ mathfmt convert input.docx                           # 保守一键转换
 mathfmt convert "folder/*.docx" --output-dir converted --batch-report batch.json  # 批量转换
 mathfmt validate input.docx                           # 离线结构验证
 mathfmt validate input.docx --compatibility wps       # WPS 兼容性检查
+mathfmt gui                                           # 打开本地图形界面（拖拽转换）
 mathfmt doctor                                        # 环境诊断
 mathfmt update                                        # 检查 GitHub 更新
 ```
@@ -265,6 +283,7 @@ mathfmt convert input.docx                           # Conservative one-step con
 mathfmt convert "folder/*.docx" --output-dir converted --batch-report batch.json  # Batch conversion
 mathfmt validate input.docx                           # Offline structure validation
 mathfmt validate input.docx --compatibility wps       # WPS compatibility lint
+mathfmt gui                                           # Open the local drag-and-drop GUI
 mathfmt doctor                                        # Environment check
 mathfmt update                                        # Check GitHub for updates
 ```
