@@ -31,7 +31,30 @@ All commands that produce OMML (`apply`, `convert`) accept `--xsl` to override b
 
 ---
 
-## 2. Review-First Workflow (Recommended)
+## 2. GUI: Drag-and-Drop (Fastest)
+
+For a single document, or if you would rather not touch a terminal command beyond
+launching it:
+
+```powershell
+mathfmt gui
+```
+
+This starts a local server bound to `127.0.0.1` and opens the page in your default
+browser. Drag a `.docx` onto the drop zone (or click it to choose a file), pick a
+confidence level if you want something other than the conservative default, and
+download the converted document plus its JSON scan report from the page. Nothing is
+uploaded anywhere — the server only listens on localhost, and each upload is
+processed in a private temporary directory that is cleaned up automatically. Press
+Ctrl+C in the terminal to stop the server.
+
+`mathfmt gui` mirrors `mathfmt convert`'s conservative one-step pipeline (see
+section 4 below). For batch processing, custom aliases, custom recognizers, or the
+full review-before-apply workflow, use the CLI commands in the rest of this guide.
+
+---
+
+## 3. Review-First Workflow (Recommended)
 
 For documents with mixed technical prose, code, images, and formulas:
 
@@ -236,7 +259,7 @@ Open `result.docx` in Word and inspect:
 
 ---
 
-## 3. One-Step Conversion
+## 4. One-Step Conversion
 
 For documents where most candidates are likely formulas (e.g., all-math problem sets):
 
@@ -296,7 +319,7 @@ Batch exit codes:
 
 ---
 
-## 4. Understanding the Report
+## 5. Understanding the Report
 
 ### Scan report (`candidates.json`)
 
@@ -351,7 +374,7 @@ for compatibility. New automation should prefer `summary` and `formulas`.
 
 ---
 
-## 5. Validating Output
+## 6. Validating Output
 
 Use `mathfmt validate` to check DOCX correctness without opening Word:
 
@@ -419,7 +442,7 @@ rendering remains a manual environment-specific check.
 
 ---
 
-## 6. Working with Tables
+## 7. Working with Tables
 
 Formulas in table cells are automatically detected and rendered with reduced font size.
 
@@ -433,13 +456,13 @@ The split logic respects bracket nesting — it will not break inside `(...)`, `
 
 ---
 
-## 7. Headers and Footers
+## 8. Headers and Footers
 
 MathFmt scans `word/header*.xml` and `word/footer*.xml` in addition to the document body. Formulas in headers and footers are converted the same way as body text formulas.
 
 ---
 
-## 8. CI / Headless Use
+## 9. CI / Headless Use
 
 MathFmt can run without a display:
 
@@ -462,7 +485,7 @@ The `doctor --json` output is machine-readable:
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Problem | Solution |
 |---|---|

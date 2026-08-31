@@ -117,6 +117,20 @@ def _convert_paths(
     return planned
 
 
+def run_gui(args: argparse.Namespace) -> int:
+    from .gui import serve  # imported lazily: http.server/webbrowser are only needed here
+
+    if args.xsl is not None:
+        xsl_path = find_xsl(args.xsl)
+    else:
+        try:
+            xsl_path = find_xsl()
+        except FileNotFoundError:
+            xsl_path = None
+    serve(host=args.host, port=args.port, xsl_path=xsl_path, open_browser=not args.no_browser)
+    return 0
+
+
 def doctor_data(explicit_xsl: Path | None = None) -> dict[str, object]:
     data: dict[str, object] = {
         "mathfmt": __version__,
@@ -199,6 +213,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     convert.add_argument(
         "--strict", action="store_true", help="do not write output if any selected formula fails"
+    )
+
+    gui = subparsers.add_parser(
+        "gui", help="launch a local browser drag-and-drop interface (no other commands needed)"
+    )
+    gui.add_argument("--host", default="127.0.0.1", help="interface to bind (default: 127.0.0.1, local only)")
+    gui.add_argument("--port", type=int, default=0, help="port to bind (default: 0, pick a free port)")
+    gui.add_argument("--no-browser", action="store_true", help="do not automatically open a browser tab")
+    gui.add_argument(
+        "--xsl", type=Path, help="path to MML2OMML.XSL (optional; built-in Python backend used otherwise)"
     )
 
     doctor = subparsers.add_parser("doctor", help="check the local MathFmt environment")
@@ -456,6 +480,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0 if result["skipped_count"] == 0 else 2
         if args.command == "convert":
             return run_convert(args)
+        if args.command == "gui":
+            return run_gui(args)
         if args.command == "doctor":
             data = doctor_data(args.xsl)
             if args.as_json:

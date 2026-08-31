@@ -4,6 +4,12 @@ All notable changes to MathFmt are documented here.
 
 ## [Unreleased]
 
+### Added
+- `mathfmt gui`: a local, stdlib-only browser drag-and-drop interface. Binds to
+  `127.0.0.1`, mirrors `convert`'s conservative scan → confidence filter → apply
+  pipeline, and offers the converted DOCX and its JSON scan report for download.
+  No new runtime dependency.
+
 ## [1.0.0] - 2026-08-08
 
 ### Added
