@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 MathFmt is a Python CLI tool & library that converts plain-text math formulas (e.g. `x^2+1`, `sqrt(a/b)`, `lim(x->0)`) embedded in `.docx` files into native Office Math Markup Language (OMML) equations. Designed for textbooks, exams, and technical reports.
 
 - **Author:** Leo (gml853503962@gmail.com)
-- **Version:** 1.0.0 (see `src/mathfmt/_version.py`)
+- **Version:** 1.1.0 (see `src/mathfmt/_version.py`)
 - **License:** MIT
 - **Repo:** https://github.com/gml853503962-creator/mathfmt
 - **Python:** 3.10–3.14 (pure Python, no native extensions)
@@ -26,7 +26,7 @@ MathFmt is a Python CLI tool & library that converts plain-text math formulas (e
 MathFmt/
 ├── src/mathfmt/           # Package source
 │   ├── __init__.py        # Stable public API exports (18 symbols)
-│   ├── _version.py        # Single version source: "1.0.0"
+│   ├── _version.py        # Single version source: "1.1.0"
 │   ├── __main__.py        # `python -m mathfmt` entry point
 │   ├── cli.py             # argparse CLI: 7 subcommands (~570 lines)
 │   ├── gui.py              # mathfmt gui: stdlib-only local browser drag-and-drop server

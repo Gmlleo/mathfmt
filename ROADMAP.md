@@ -103,9 +103,20 @@ single-maintainer project and is now in stable maintenance mode.
 - [x] Typed plugin/hook system for custom formula recognizers in Python and the CLI
 - [x] 100-page/800-formula benchmark, CI gate, and per-part XML performance optimization
 
-MathFmt is feature-complete at v1.0 and is now in stable maintenance mode. There are
-no planned feature releases; future changes are limited to necessary security and
-compatibility maintenance.
+MathFmt's core conversion pipeline (parser, OMML backends, CLI, reports, plugin API)
+was feature-complete at v1.0 and remains in stable maintenance mode: no changes to
+supported syntax or the documented API are planned. Small, backward-compatible
+usability additions that don't touch that surface — like the v1.1 GUI below — may
+still land when there's a clear, demonstrated need; otherwise future changes are
+limited to necessary security and compatibility maintenance.
+
+## v1.1.0 — Local GUI · 本地图形界面 (released 2026-08-31)
+
+**Focus:** Lower the barrier for users who don't want to use the terminal.
+
+- [x] `mathfmt gui`: a local, stdlib-only browser drag-and-drop interface bound to
+  `127.0.0.1`, running the same conservative convert pipeline. No new runtime
+  dependency; no change to the stable Python API or CLI commands added in v1.0.
 
 ---
 

@@ -203,8 +203,8 @@ class TestCheckForUpdates:
 
     def test_detects_newer_version(self) -> None:
         fake_release = {
-            "tag_name": "v1.1.0",
-            "html_url": "https://github.com/.../releases/tag/v1.1.0",
+            "tag_name": "v1.2.0",
+            "html_url": "https://github.com/.../releases/tag/v1.2.0",
             "body": "New release!",
             "published_at": "2026-06-22T00:00:00Z",
             "prerelease": False,
@@ -214,7 +214,7 @@ class TestCheckForUpdates:
                 with patch("mathfmt.update._save_cache"):
                     info = check_for_updates(force=True)
                     assert info.is_update_available
-                    assert info.latest_version == "1.1.0"
+                    assert info.latest_version == "1.2.0"
                     assert "New release!" in info.release_notes
 
     def test_same_version_is_up_to_date(self) -> None:
@@ -284,7 +284,7 @@ class TestCheckForUpdates:
 
     def test_bypasses_stale_cache(self) -> None:
         fake_release = {
-            "tag_name": "v1.1.0",
+            "tag_name": "v1.2.0",
             "html_url": "",
             "body": "",
             "published_at": "",
@@ -295,7 +295,7 @@ class TestCheckForUpdates:
                 with patch("mathfmt.update._save_cache"):
                     info = check_for_updates()
                     assert info.is_update_available
-                    assert info.latest_version == "1.1.0"
+                    assert info.latest_version == "1.2.0"
 
     def test_prerelease_cache_isolated_from_stable(self, tmp_path: Path) -> None:
         prerelease_cache = {

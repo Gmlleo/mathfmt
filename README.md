@@ -119,9 +119,10 @@ MathFmt 1.0 also supports trusted custom formula recognizers through repeatable
 
 ## Status
 
-**Stable (v1.0.0).** Feature-complete cross-platform OMML conversion with a stable
+**Stable (v1.1.0).** Feature-complete cross-platform OMML conversion with a stable
 Python API, deterministic custom recognizers, structured safety reports, batch
-processing, WPS/LibreOffice compatibility checks, and a 100-page performance gate.
+processing, WPS/LibreOffice compatibility checks, a 100-page performance gate, and
+an optional local drag-and-drop GUI (`mathfmt gui`).
 
 ---
 
@@ -209,6 +210,7 @@ pip install --upgrade mathfmt
 | **0.4.0** (2026-08-06) | LaTeX 分隔符；多行对齐；分段函数；化学与物理记号；自定义符号别名 |
 | **0.5.0** (2026-08-07) | 批量转换；WPS 离线兼容性检查与 Windows 往返渲染验收 |
 | **1.0.0** (2026-08-08) | 稳定 API 与 SemVer；插件钩子；100 页性能门禁；Python 3.14 |
+| **1.1.0** (2026-08-31) | `mathfmt gui`：本地浏览器拖拽界面，无需终端命令 |
 
 ### 更多文档
 
@@ -316,6 +318,7 @@ pip install --upgrade mathfmt
 | **0.4.0** (2026-08-06) | LaTeX delimiters, aligned and piecewise equations, chemistry and physics notation, and symbol aliases |
 | **0.5.0** (2026-08-07) | Batch conversion, offline WPS compatibility lint, and Windows WPS round-trip rendering QA |
 | **1.0.0** (2026-08-08) | Stable API and SemVer, plugin hooks, 100-page performance gate, Python 3.14 |
+| **1.1.0** (2026-08-31) | `mathfmt gui`: a local browser drag-and-drop interface, no terminal commands needed |
 
 ### Further Reading
 
