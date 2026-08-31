@@ -4,6 +4,8 @@ All notable changes to MathFmt are documented here.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-31
+
 ### Added
 - `mathfmt gui`: a local, stdlib-only browser drag-and-drop interface. Binds to
   `127.0.0.1`, mirrors `convert`'s conservative scan → confidence filter → apply
