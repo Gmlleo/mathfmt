@@ -336,9 +336,41 @@ def test_omml_to_text_rejects_matrix_and_piecewise() -> None:
         omml_to_text(omath_for("cases(x^2 if x>=0; -x if x<0)"))
 
 
+def test_omml_to_text_rejects_relation_alignment_matrix_multiline() -> None:
+    # combine_equation_array's two-column m:m (used for MathFmt's own
+    # relation-aligned multi-line output) is a different feature from a
+    # mathematical matrix, but shares its OMML shape and is equally
+    # unsupported — must not be silently misread as one long formula.
+    array = combine_equation_array([omath_for("a = b"), omath_for("long = d")])
+    with pytest.raises(OmmlConversionError, match="m:m"):
+        omml_to_text(array)
+
+
+def test_omml_to_text_rejects_eqarr_multiline() -> None:
+    array = combine_equation_array([omath_for("a + b"), omath_for("c - d")])
+    with pytest.raises(OmmlConversionError, match="m:eqArr"):
+        omml_to_text(array)
+
+
 def test_omml_to_text_rejects_non_omath_root() -> None:
     with pytest.raises(OmmlConversionError, match="oMath"):
         omml_to_text(etree.Element(qname(M_NS, "r")))
+
+
+def test_omml_to_text_rejects_bare_partial_symbol() -> None:
+    # A malformed/hand-authored m:f with nothing but "∂" on each side has no
+    # valid linear-text form ("∂" is only ever accepted through partial(f, x)
+    # or an unparenthesized ∂f/∂x) — must raise rather than emit unparseable
+    # text like "partial(,)".
+    omath = etree.Element(qname(M_NS, "oMath"))
+    f = etree.SubElement(omath, qname(M_NS, "f"))
+    for part in ("num", "den"):
+        container = etree.SubElement(f, qname(M_NS, part))
+        run = etree.SubElement(container, qname(M_NS, "r"))
+        etree.SubElement(run, qname(M_NS, "t")).text = "∂"
+
+    with pytest.raises(OmmlConversionError, match="partial derivative"):
+        omml_to_text(omath)
 
 
 def test_omml_to_text_rejects_unknown_element() -> None:

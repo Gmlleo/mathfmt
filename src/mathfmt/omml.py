@@ -309,9 +309,11 @@ def omml_to_text(omath_elem: etree._Element) -> str:
     (including derivative and partial-derivative fractions), radicals,
     super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket,
     vectors), and limits / annotated reaction arrows. Constructs this converter
-    does not reverse — matrices, piecewise/cases tables, and n-ary operators —
-    raise :class:`OmmlConversionError` naming the unsupported element instead of
-    guessing at a wrong answer.
+    does not reverse — matrices, piecewise/cases tables, **MathFmt's own
+    multi-line/aligned equation output** (also built from a native OMML matrix
+    or ``m:eqArr``, despite not being a mathematical matrix), and n-ary
+    operators — raise :class:`OmmlConversionError` naming the unsupported
+    element instead of guessing at a wrong answer.
 
     The result re-parses (via :func:`formula_to_mathml <mathfmt.core.formula_to_mathml>`)
     to an equivalent formula, not necessarily byte-identical input text — for
@@ -474,8 +476,21 @@ def _emit_fraction(elem: etree._Element) -> str:
     partial_num = _strip_partial_symbol(num)
     partial_den = _strip_partial_symbol(den)
     if partial_num is not None and partial_den is not None:
+        if not partial_num or not partial_den:
+            # A bare "∂" with nothing after it (e.g. a malformed or
+            # hand-authored m:f) has no valid linear-text form: "∂" is only
+            # ever accepted through partial(f, x) or unparenthesized ∂f/∂x,
+            # never on its own. Raise rather than emit unparseable text.
+            raise OmmlConversionError(
+                "omml_to_text cannot reconstruct a partial derivative with an empty numerator or denominator"
+            )
         return f"partial({partial_num},{partial_den})"
-    return _emit_operand(num) + "/" + _emit_operand(den)
+    num_text, den_text = _emit_operand(num), _emit_operand(den)
+    if _PARTIAL_SYMBOL in num_text or _PARTIAL_SYMBOL in den_text:
+        raise OmmlConversionError(
+            "omml_to_text cannot reconstruct this fraction: it contains a bare '∂' outside the partial(f, x) shape"
+        )
+    return num_text + "/" + den_text
 
 
 def _strip_partial_symbol(container: etree._Element | None) -> str | None:

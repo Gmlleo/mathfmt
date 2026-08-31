@@ -42,6 +42,7 @@ class _SessionStore:
         self._ttl = ttl_seconds
         self._lock = threading.Lock()
         self._sessions: dict[str, tuple[Path, float]] = {}
+        self._apply_locks: dict[str, threading.Lock] = {}
 
     def store(self, session_dir: Path) -> str:
         token = secrets.token_urlsafe(16)
@@ -55,11 +56,24 @@ class _SessionStore:
             entry = self._sessions.get(token)
         return entry[0] if entry is not None else None
 
+    def apply_lock(self, token: str) -> threading.Lock:
+        """A lock scoped to one session, so two overlapping ``/apply`` requests
+        for the same token (a double-click, a slow-response retry, two open
+        tabs) serialize instead of racing on the same review/output files.
+        """
+        with self._lock:
+            lock = self._apply_locks.get(token)
+            if lock is None:
+                lock = threading.Lock()
+                self._apply_locks[token] = lock
+            return lock
+
     def clear(self) -> None:
         with self._lock:
             for session_dir, _ in self._sessions.values():
                 shutil.rmtree(session_dir, ignore_errors=True)
             self._sessions.clear()
+            self._apply_locks.clear()
 
     def _sweep_locked(self) -> None:
         now = time.monotonic()
@@ -67,6 +81,7 @@ class _SessionStore:
         for token in expired:
             session_dir, _ = self._sessions.pop(token)
             shutil.rmtree(session_dir, ignore_errors=True)
+            self._apply_locks.pop(token, None)
 
 
 class _Server(ThreadingHTTPServer):
@@ -235,24 +250,36 @@ class _Handler(BaseHTTPRequestHandler):
         output_path = session_dir / "output.docx"
         result_path = session_dir / "result.json"
 
-        review = json.loads(review_path.read_text(encoding="utf-8"))
-        for candidate in review.get("candidates", []):
-            candidate_id = candidate.get("id")
-            if candidate_id in selection:
-                candidate["selected"] = bool(selection[candidate_id])
-        review_path.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Serialize concurrent /apply calls for the same session, and clear any
+        # previous attempt's output first: apply_docx only skips writing a new
+        # output.docx when the selection fails under strict mode, which would
+        # otherwise leave an *earlier, successful* attempt's file on disk for
+        # /download to silently keep serving alongside an "output_available:
+        # false" response.
+        with self.server.sessions.apply_lock(token):
+            output_path.unlink(missing_ok=True)
+            result_path.unlink(missing_ok=True)
 
-        result = apply_docx(
-            input_path,
-            review_path,
-            output_path,
-            result_path,
-            self.server.xsl_path,
-            command_name="gui",
-            strict=strict,
-        )
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            for candidate in review.get("candidates", []):
+                candidate_id = candidate.get("id")
+                if candidate_id in selection:
+                    candidate["selected"] = bool(selection[candidate_id])
+            review_path.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        strict_failed = bool(result.get("summary", {}).get("strict_failed"))
+            result = apply_docx(
+                input_path,
+                review_path,
+                output_path,
+                result_path,
+                self.server.xsl_path,
+                command_name="gui",
+                strict=strict,
+            )
+
+            strict_failed = bool(result.get("summary", {}).get("strict_failed"))
+            output_available = output_path.is_file() and not strict_failed
+
         skipped_items = [
             {
                 "source": str(item.get("source", item.get("id", "?"))),
@@ -265,7 +292,7 @@ class _Handler(BaseHTTPRequestHandler):
             "skipped": result["skipped_count"],
             "skipped_items": skipped_items,
             "strict_failed": strict_failed,
-            "output_available": output_path.is_file() and not strict_failed,
+            "output_available": output_available,
             "token": token,
             "output_name": f"{stem}.mathfmt.docx",
             "report_name": f"{stem}.mathfmt.report.json",

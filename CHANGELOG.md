@@ -9,7 +9,9 @@ All notable changes to MathFmt are documented here.
   text, confidence, and parse status/reason) before converting, pre-checked with
   the same conservative defaults as `mathfmt convert`. The server-side flow is now
   a `/scan` step followed by an `/apply` step instead of one combined `/convert`
-  request.
+  request; concurrent `/apply` calls for the same session are serialized, and a
+  failed/strict re-apply clears any earlier attempt's output so `/download`
+  never serves a stale, superseded conversion.
 - `FormulaError.to_dict()` (and therefore a scan candidate's `parse_error_details`
   and an apply report's `error_details`) includes a plain-language `hint` for
   recognized mistakes — mismatched brackets, a `cases`/`{...}` branch missing
@@ -19,9 +21,9 @@ All notable changes to MathFmt are documented here.
   linear formula syntax — the reverse of `mathml_to_omml_py`. Chemistry formulas
   and reactions reconstruct in their original bare form (`H2O`, `(OH)2`) so they
   keep their upright styling on reparse. Raises the new `OmmlConversionError`
-  for constructs it doesn't reverse (matrices, piecewise/`cases` tables, n-ary
-  operators) instead of guessing. See `docs/formula-syntax.md` section 9 for
-  exact scope.
+  for constructs it doesn't reverse (matrices, piecewise/`cases` tables,
+  MathFmt's own multi-line/aligned equation output, n-ary operators) instead
+  of guessing. See `docs/formula-syntax.md` section 9 for exact scope.
 - `packaging/`: a `build_exe.py` script (PyInstaller) that bundles `mathfmt gui`
   into a standalone double-clickable executable for people without Python
   installed. Not part of the automated release pipeline — see
