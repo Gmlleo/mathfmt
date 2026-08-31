@@ -72,6 +72,8 @@ def test_formula_error_reports_column_context_and_expected_token() -> None:
     ("source", "expected_snippet"),
     [
         ("(x]", "mismatched bracket"),
+        ("(x+1", "mismatched bracket"),  # never closed at all, not just the wrong closer
+        ("[x+1", "mismatched bracket"),
         ("cases(x^2; -x if x<0)", "missing 'if'"),
     ],
 )
@@ -82,6 +84,19 @@ def test_formula_error_hint_covers_common_mistakes(source: str, expected_snippet
     hint = exc_info.value.to_dict().get("hint")
     assert hint is not None
     assert expected_snippet in hint
+
+
+def test_formula_error_hint_does_not_misfire_for_an_illegal_character() -> None:
+    # "x @ y" fails at the tokenizer (unrecognized character), with an
+    # `expected` string that happens to start the same way as the parser's
+    # unrelated "missing operand" message — the hint rules must not conflate
+    # the two.
+    with pytest.raises(FormulaError) as exc_info:
+        formula_to_mathml("x @ y")
+
+    hint = exc_info.value.to_dict()["hint"]
+    assert "isn't recognized" in hint
+    assert "operand is missing" not in hint
 
 
 def test_formula_error_hint_is_absent_for_unrecognized_expected() -> None:

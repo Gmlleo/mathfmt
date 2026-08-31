@@ -499,7 +499,13 @@ reason would be misread as chemistry.
 Not supported — `OmmlConversionError` is raised naming the element rather than
 guessing at a wrong answer:
 
-- Matrices and piecewise/`cases` tables (native OMML `m:m`)
+- Matrices, piecewise/`cases` tables, **and MathFmt's own multi-line/aligned
+  equation output** — all use native OMML `m:m` (a two-column relation-aligned
+  matrix for aligned lines, or a matrix wrapped in `{` for `cases`), and a
+  one-column layout uses `m:eqArr`. Section 5's multi-line/aligned-equation
+  support is otherwise a separately documented, commonly-used feature; it is
+  specifically *not* covered by `omml_to_text` despite not being a
+  mathematical matrix.
 - N-ary operators (`m:nary`) and other elements outside the list above
 - Nth-root radicals (MathFmt's own input grammar has no nth-root syntax, so this
   can only occur on hand-authored OMML)

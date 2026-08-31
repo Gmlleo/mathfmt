@@ -317,24 +317,28 @@ class FormulaError(ValueError):
             start = max(0, (self.position or 0) - 12)
             end = min(len(self.source), (self.position or 0) + 12)
             details["context"] = self.source[start:end]
-        hint = _suggest_fix(self.expected, self.found, str(self))
+        hint = _suggest_fix(self.expected)
         if hint:
             details["hint"] = hint
         return details
 
 
-def _suggest_fix(expected: str | None, found: str | None, message: str) -> str | None:
+def _suggest_fix(expected: str | None) -> str | None:
     """Best-effort, human-readable suggestion for a recognized FormulaError shape.
 
     Matches on the same literal ``expected`` strings the parser already raises
     (see the ``FormulaError(..., expected=...)`` call sites above); an
     unrecognized or dynamic ``expected`` value yields no hint rather than a
-    guess, so this never contradicts the actual error.
+    guess, so this never contradicts the actual error. Matches are exact, not
+    prefix/substring, so one rule's wording can't accidentally catch a
+    different error that happens to start the same way.
     """
-    del found  # not currently distinguishing on `found`, kept for future rules
     if not expected:
         return None
-    if expected in {")", "]", "}", "(", "[", "{"}:
+    # `expect("RPAREN")` reports the token *kind* (shared by ), ], and }) for a
+    # bracket that's missing entirely; a present-but-wrong closer instead
+    # reports the specific expected character — both mean the same mistake.
+    if expected in {"RPAREN", ")", "]", "}", "(", "[", "{"}:
         return "Check for a missing or mismatched bracket — every '(', '[', '{' needs a matching closer."
     if expected == "if":
         return "Each cases()/{...} branch needs the form 'value if condition' — add the missing 'if'."
@@ -353,11 +357,16 @@ def _suggest_fix(expected: str | None, found: str | None, message: str) -> str |
     if expected == "chemical formula":
         return "Each side of the reaction arrow needs at least one recognizable chemical formula."
     if expected == "one reaction arrow":
-        return "A single reaction may only use one arrow (->, <->, or =>); split multi-arrow text into separate formulas."
+        return (
+            "A single reaction may only use one arrow (->, <->, or =>); "
+            "split multi-arrow text into separate formulas."
+        )
     if expected == "]] or ,":
         return "Separate matrix entries with ',' and rows with ';', closing the matrix with ']]'."
-    if expected.startswith("number, identifier"):
-        return "An operand is missing here — check for a stray operator, empty group, or unsupported symbol."
+    if expected == "number, identifier, function, matrix, or grouped expression":
+        return "An operand is missing here — check for a stray operator or an empty group."
+    if expected == "number, identifier, operator, or grouping symbol":
+        return "This character isn't recognized — check for a typo or an unsupported symbol."
     return None
 
 

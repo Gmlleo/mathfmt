@@ -191,6 +191,51 @@ def test_apply_strict_mode_withholds_output_on_failure(tmp_path: Path, running_s
     assert payload["output_available"] is False
 
 
+def test_apply_does_not_serve_stale_output_after_a_later_failed_reapply(
+    tmp_path: Path, running_server: Any
+) -> None:
+    base_url, server = running_server
+    source = make_docx(tmp_path / "source.docx")
+
+    _, scan_payload = _post_scan(base_url, source)
+    token = scan_payload["token"]
+    selection = {c["id"]: c["selected"] for c in scan_payload["candidates"]}
+
+    # First apply succeeds and produces a downloadable output.docx.
+    status, payload = _post_apply(base_url, token, selection)
+    assert status == 200
+    assert payload["output_available"] is True
+    with urllib.request.urlopen(f"{base_url}/download/{token}") as resp:
+        assert resp.status == 200
+
+    # Re-apply on the same token/session with a candidate that fails under
+    # strict mode. The response correctly reports no output, but /download
+    # must not keep serving the earlier successful attempt's leftover file.
+    session_dir = server.sessions.get(token)
+    review_path = session_dir / "candidates.json"
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    review["candidates"].append(
+        {
+            "id": "bogus",
+            "selected": False,
+            "part": "word/document.xml",
+            "paragraph_index": 0,
+            "start": 0,
+            "end": 5,
+            "source": "this text does not appear in the fixture document",
+        }
+    )
+    review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+
+    status, payload = _post_apply(base_url, token, {"bogus": True}, strict=True)
+    assert status == 200
+    assert payload["output_available"] is False
+
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        urllib.request.urlopen(f"{base_url}/download/{token}")
+    assert excinfo.value.code == 404
+
+
 def test_apply_rejects_unknown_token(running_server: Any) -> None:
     base_url, _ = running_server
     status, payload = _post_apply(base_url, "does-not-exist", {})
