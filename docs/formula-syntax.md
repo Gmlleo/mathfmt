@@ -476,13 +476,25 @@ See `skills/mathfmt/references/paper-notation.md` for the notation conventions M
 mapping: given a native `m:oMath`/`m:oMathPara` element, it reconstructs a linear
 string that re-parses to an equivalent formula through `formula_to_mathml`. It is
 not guaranteed to reproduce the exact original input text — only an equivalent
-one — for example, both `2*x` and `2x` reconstruct as `2x`, and a subscript always
-reconstructs with an explicit `_` (`p_1` rather than the bare `p1` shorthand).
+one — for example, both `2*x` and `2x` reconstruct as `2x`. A subscript
+reconstructs with an explicit `_` (`p_1` rather than the bare `p1` shorthand),
+*except* a chemistry element/group count, described next.
 
 Supported: numbers, identifiers, operators and relations, fractions (including
 derivative and partial-derivative fractions, via `d`/`∂` detection), radicals,
 super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket
-delimiters, vectors), and `lim(...)` / annotated reaction arrows (`=>[heat]`).
+delimiters, vectors), `lim(...)` / annotated reaction arrows (`=>[heat]`), and
+chemistry formulas and reactions (`H2O`, `(OH)2`, `2H2 + O2 -> 2H2O`) — these
+reconstruct in their original bare form (no `_`) so they re-parse through
+MathFmt's dedicated chemistry grammar rather than as a generic subscript.
+
+Chemistry detection is a heuristic, not a guarantee: it looks for the
+upright/plain OMML run styling MathFmt's own chemistry grammar marks element
+symbols with, narrowed by also requiring the subscript to be all digits (an
+element count always is). `omml_to_text` accepts any `m:oMath`, not just
+MathFmt's own output, so hand-authored OMML that happens to combine an
+upright-styled subscript base with an all-digit subscript for an unrelated
+reason would be misread as chemistry.
 
 Not supported — `OmmlConversionError` is raised naming the element rather than
 guessing at a wrong answer:
@@ -491,8 +503,3 @@ guessing at a wrong answer:
 - N-ary operators (`m:nary`) and other elements outside the list above
 - Nth-root radicals (MathFmt's own input grammar has no nth-root syntax, so this
   can only occur on hand-authored OMML)
-
-Chemistry formulas and reactions are a special case worth calling out: they
-reconstruct correctly (same digits, subscripts, arrows) but as ordinary algebra
-rather than through the dedicated chemistry grammar, so element symbols come back
-in italic math styling instead of chemistry's upright styling.

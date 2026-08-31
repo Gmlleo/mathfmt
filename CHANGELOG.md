@@ -16,10 +16,12 @@ All notable changes to MathFmt are documented here.
   `if`, wrong argument counts, and a few other common shapes.
 - `omml_to_text(omath_elem)` (in `mathfmt.omml`, re-exported from the top-level
   package) converts a native `m:oMath`/`m:oMathPara` element back to MathFmt's
-  linear formula syntax — the reverse of `mathml_to_omml_py`. Raises the new
-  `OmmlConversionError` for constructs it doesn't reverse (matrices,
-  piecewise/`cases` tables, n-ary operators) instead of guessing. See
-  `docs/formula-syntax.md` section 9 for scope and known limitations.
+  linear formula syntax — the reverse of `mathml_to_omml_py`. Chemistry formulas
+  and reactions reconstruct in their original bare form (`H2O`, `(OH)2`) so they
+  keep their upright styling on reparse. Raises the new `OmmlConversionError`
+  for constructs it doesn't reverse (matrices, piecewise/`cases` tables, n-ary
+  operators) instead of guessing. See `docs/formula-syntax.md` section 9 for
+  exact scope.
 - `packaging/`: a `build_exe.py` script (PyInstaller) that bundles `mathfmt gui`
   into a standalone double-clickable executable for people without Python
   installed. Not part of the automated release pipeline — see

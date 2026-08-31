@@ -316,10 +316,15 @@ def omml_to_text(omath_elem: etree._Element) -> str:
     The result re-parses (via :func:`formula_to_mathml <mathfmt.core.formula_to_mathml>`)
     to an equivalent formula, not necessarily byte-identical input text — for
     example, both ``2*x`` and ``2x`` round-trip to ``2x``. Chemistry formulas and
-    reactions are one specific case of this: they reconstruct with the same
-    digits, subscripts, and arrows, but as ordinary algebra rather than through
-    MathFmt's dedicated chemistry grammar, so the element symbols come back in
-    italic math styling instead of chemistry's upright styling.
+    reactions are specifically detected and reconstructed in their original bare
+    form (``H2O``, ``(OH)2``, ...) rather than a generic subscript, so they
+    re-parse through MathFmt's dedicated chemistry grammar and keep their
+    upright element-symbol styling. That detection is a heuristic keyed on
+    MathFmt's own upright-run styling plus an all-digit subscript, not a
+    guarantee: this function accepts any ``m:oMath``, not just MathFmt's own
+    output, so hand-authored OMML that happens to combine both for an
+    unrelated reason would be misread as chemistry. See
+    ``docs/formula-syntax.md`` section 9 for the exact rule.
     """
     tag = etree.QName(omath_elem).localname
     if tag not in _PASSTHROUGH_CONTAINERS:
@@ -337,15 +342,70 @@ def _join_emitted(children: list[etree._Element]) -> str:
     number (e.g. adjacent runs ``d`` and ``s`` reconstructing as ``ds`` instead
     of ``d`` times ``s``). An explicit ``*`` is semantically identical to the
     implicit multiplication it replaces, so this is always safe, even where
-    unnecessary.
+    unnecessary — except between two chemistry-styled atoms (adjacent element
+    symbols like ``O`` then ``H`` in ``OH``), where bare adjacency is exactly
+    the shape MathFmt's chemistry grammar looks for; inserting ``*`` there
+    would make it reparse as ordinary algebra instead.
     """
     result = ""
+    prev_child: etree._Element | None = None
     for child in children:
         fragment = _emit(child)
-        if result and fragment and result[-1].isalnum() and fragment[0].isalnum():
-            result += "*"
+        if result and fragment and _merge_risk(result[-1], fragment[0]):
+            if not (_is_plain_atom(prev_child) and _is_plain_atom(child)):
+                result += "*"
         result += fragment
+        prev_child = child
     return result
+
+
+def _merge_risk(prev_char: str, next_char: str) -> bool:
+    """True where the tokenizer could read two adjacent atoms as one token.
+
+    A letter followed by a letter or digit can extend an identifier (``d`` +
+    ``s`` -> ``ds``; ``d`` + ``2`` -> ``d2``, MathFmt's own auto-subscript
+    shape). Two digits can extend a number. A digit followed by a letter is
+    never risky — MathFmt's ``NUMBER`` token stops at the first non-digit, so
+    ``2`` + ``H`` already tokenizes as two atoms (this is the ordinary
+    coefficient shorthand ``2x``, and also lets a chemistry count like ``2H2O``
+    round-trip without an inserted ``*`` breaking its bare-adjacency shape).
+    """
+    if prev_char.isalpha():
+        return next_char.isalnum()
+    if prev_char.isdigit():
+        return next_char.isdigit()
+    return False
+
+
+def _is_plain_run(elem: etree._Element) -> bool:
+    """True for a text run styled upright/plain (``m:rPr/m:sty[@m:val='p']``),
+    which is how MathFmt marks chemistry element symbols — they're generated
+    as MathML ``mtext`` (see ``_parse_chemical_formula`` in core.py), and the
+    ``mtext`` branch of ``_convert`` above always sets ``plain=True``.
+    """
+    if etree.QName(elem).localname != "r":
+        return False
+    r_pr = _find(elem, "rPr")
+    if r_pr is None:
+        return False
+    sty = _find(r_pr, "sty")
+    return sty is not None and sty.get(qname(M_NS, "val")) == "p"
+
+
+def _is_plain_atom(elem: etree._Element | None) -> bool:
+    """Like :func:`_is_plain_run`, but also true for a chemistry element with
+    its subscript count attached (``m:sSub`` whose base is a plain run), so
+    adjacency detection sees ``H2`` next to ``O`` the same way it sees a bare
+    ``O`` next to ``H``.
+    """
+    if elem is None:
+        return False
+    if _is_plain_run(elem):
+        return True
+    if etree.QName(elem).localname == "sSub":
+        base = _find(elem, "e")
+        return base is not None and len(base) == 1 and _is_plain_run(base[0])
+    return False
 
 
 def _emit(elem: etree._Element) -> str:
@@ -364,7 +424,7 @@ def _emit(elem: etree._Element) -> str:
     if tag == "sSup":
         return _emit_operand(_find(elem, "e")) + "^" + _emit_operand(_find(elem, "sup"))
     if tag == "sSub":
-        return _emit_operand(_find(elem, "e")) + "_" + _emit_operand(_find(elem, "sub"))
+        return _emit_subscript(elem)
     if tag == "sSubSup":
         return (
             _emit_operand(_find(elem, "e"))
@@ -426,6 +486,47 @@ def _strip_partial_symbol(container: etree._Element | None) -> str | None:
     if etree.QName(first).localname != "r" or _run_text(first) != _PARTIAL_SYMBOL:
         return None
     return _join_emitted(list(container)[1:])
+
+
+def _emit_subscript(elem: etree._Element) -> str:
+    """Reconstruct ``m:sSub`` as ``base_sub`` — except a chemistry element
+    count (``H2``) or a parenthesized chemistry group count (``(OH)2``), which
+    need the bare ``base`` + ``sub`` shape (no ``_``) to re-trigger MathFmt's
+    chemistry grammar on reparse, matching how they were written in the first
+    place. MathFmt's forward converter only ever puts a parenthesized group
+    behind ``sSub`` for this chemistry case — an ordinary group directly
+    followed by a digit parses as multiplication, not a subscript.
+
+    The chemistry-vs-generic-subscript signal is the OMML plain/upright run
+    styling MathFmt's own chemistry grammar marks element symbols with — a
+    heuristic, not a guarantee, since ``omml_to_text`` also accepts
+    hand-authored OMML that could style a subscript base upright for an
+    unrelated reason. Requiring the subscript itself to be purely digits (an
+    element count is always one) narrows that: a coincidental false positive
+    now needs both an upright base *and* an all-digit subscript, e.g. a
+    genuine ``x_2`` where ``x`` happens to be styled upright.
+    """
+    base, sub = _find(elem, "e"), _find(elem, "sub")
+    sub_text = _emit_operand(sub)
+    if sub_text.isdigit() and base is not None and len(base) == 1:
+        inner = base[0]
+        if _is_plain_run(inner) or _is_chemistry_group(inner):
+            return _emit(inner) + sub_text
+    return _emit_operand(base) + "_" + sub_text
+
+
+def _is_chemistry_group(elem: etree._Element) -> bool:
+    """True for a ``m:d`` (parenthesized group) whose contents are entirely
+    chemistry-styled atoms — plain runs, or a nested element+count like the
+    ``O`` + subscript ``4`` in ``(SO4)`` — e.g. the ``(OH)`` in ``(OH)2`` or
+    the ``(SO4)`` in ``(SO4)2``.
+    """
+    if etree.QName(elem).localname != "d":
+        return False
+    inner = _find(elem, "e")
+    if inner is None or len(inner) == 0:
+        return False
+    return all(_is_plain_atom(child) for child in inner)
 
 
 def _emit_operand(elem: etree._Element | None) -> str:
