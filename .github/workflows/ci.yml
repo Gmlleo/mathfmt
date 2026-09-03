@@ -109,6 +109,15 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Exclude build output from Windows Defender scanning
+        shell: pwsh
+        run: |
+          # A freshly built, unsigned PyInstaller onefile exe is exactly what
+          # Defender's real-time protection scans hardest; on a fresh runner
+          # that first-execution scan can stall the process for minutes with
+          # no output at all. dist/build only ever contain this build's own
+          # output, so excluding them is safe.
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}\dist", "${{ github.workspace }}\build"
       - run: python -m pip install -e ".[dev]" pyinstaller
       - run: python packaging/build_exe.py
       - run: python packaging/smoke_test.py

@@ -34,9 +34,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 # A frozen onefile executable re-extracts itself on every launch, and a first
-# run can also sit through antivirus/SmartScreen scanning — generous on purpose.
-STARTUP_TIMEOUT_SECONDS = 90
+# run on a machine that has never seen this exact binary before can also sit
+# through several minutes of Defender real-time-protection scanning before
+# it's allowed to actually execute — generous on purpose. The CI job excludes
+# dist/build from scanning to avoid needing this, but a plain local run does
+# not, so the timeout still has to tolerate an unscanned first execution.
+STARTUP_TIMEOUT_SECONDS = 180
 POLL_INTERVAL_SECONDS = 0.5
+PROGRESS_INTERVAL_SECONDS = 15
 REQUEST_TIMEOUT_SECONDS = 10
 
 
@@ -66,7 +71,8 @@ def _pids_by_name(image_name: str) -> set[int]:
     return pids
 
 
-def _find_listening_port(image_name: str, deadline: float) -> int | None:
+def _find_listening_port(image_name: str, start: float, deadline: float) -> int | None:
+    next_progress = start + PROGRESS_INTERVAL_SECONDS
     while time.monotonic() < deadline:
         pids = _pids_by_name(image_name)
         if pids:
@@ -84,6 +90,13 @@ def _find_listening_port(image_name: str, deadline: float) -> int | None:
                 local = parts[1]
                 if pid in pids and local.startswith("127.0.0.1:"):
                     return int(local.rsplit(":", 1)[1])
+        now = time.monotonic()
+        if now >= next_progress:
+            state = (
+                f"{len(pids)} matching process(es), none listening yet" if pids else "no matching process yet"
+            )
+            print(f"  ... still waiting after {now - start:.0f}s ({state})")
+            next_progress = now + PROGRESS_INTERVAL_SECONDS
         time.sleep(POLL_INTERVAL_SECONDS)
     return None
 
@@ -102,12 +115,13 @@ def main() -> int:
     print(f"Launching {exe}")
     proc = subprocess.Popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
-        port = _find_listening_port(exe.name, deadline)
+        start = time.monotonic()
+        port = _find_listening_port(exe.name, start, start + STARTUP_TIMEOUT_SECONDS)
         if port is None:
             raise SystemExit(
                 f"No listening MathFmt GUI server (process {exe.name}) found "
-                f"within {STARTUP_TIMEOUT_SECONDS}s."
+                f"within {STARTUP_TIMEOUT_SECONDS}s. proc.poll()={proc.poll()!r}, "
+                f"pids matching name now: {sorted(_pids_by_name(exe.name))!r}."
             )
         url = f"http://127.0.0.1:{port}/"
         with urllib.request.urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
