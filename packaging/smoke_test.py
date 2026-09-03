@@ -113,15 +113,24 @@ def _kill_all(image_name: str) -> None:
 def main() -> int:
     exe = find_exe()
     print(f"Launching {exe}")
-    proc = subprocess.Popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Captured to a real file rather than a pipe: a frozen console app's
+    # stdout is fully buffered once redirected somewhere that isn't a real
+    # console, so a live pipe read can stay empty for the process's whole
+    # life even after it has exited — a file still holds whatever it wrote
+    # once we go read it after the fact.
+    log_path = ROOT / "packaging" / "smoke_test_exe_output.log"
+    with log_path.open("w", encoding="utf-8") as log_file:
+        proc = subprocess.Popen([str(exe)], stdout=log_file, stderr=subprocess.STDOUT)
     try:
         start = time.monotonic()
         port = _find_listening_port(exe.name, start, start + STARTUP_TIMEOUT_SECONDS)
         if port is None:
+            output = log_path.read_text(encoding="utf-8", errors="replace")
             raise SystemExit(
                 f"No listening MathFmt GUI server (process {exe.name}) found "
                 f"within {STARTUP_TIMEOUT_SECONDS}s. proc.poll()={proc.poll()!r}, "
-                f"pids matching name now: {sorted(_pids_by_name(exe.name))!r}."
+                f"pids matching name now: {sorted(_pids_by_name(exe.name))!r}.\n"
+                f"--- {log_path.name} ---\n{output or '(empty)'}\n---"
             )
         url = f"http://127.0.0.1:{port}/"
         with urllib.request.urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
@@ -133,6 +142,7 @@ def main() -> int:
     finally:
         proc.terminate()
         _kill_all(exe.name)
+        log_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
