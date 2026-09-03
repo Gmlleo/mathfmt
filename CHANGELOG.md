@@ -29,6 +29,13 @@ All notable changes to MathFmt are documented here.
   installed. Not part of the automated release pipeline — see
   `packaging/README.md`.
 
+### Changed
+- CI now builds the standalone GUI executable and smoke-tests it (boots,
+  serves its page, stops cleanly) on every push and PR, via
+  `packaging/smoke_test.py`. Building and distributing the executable (e.g.
+  attaching it to a GitHub Release) remains a manual, deliberate step outside
+  `publish.yml`.
+
 ## [1.1.0] - 2026-08-31
 
 ### Added
