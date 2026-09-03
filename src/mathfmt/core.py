@@ -370,13 +370,19 @@ def _suggest_fix(expected: str | None) -> str | None:
     return None
 
 
+# ∇ and ∓ are tokenizable but deliberately absent from MATH_CHARS: they parse
+# when they reach a formula (via a LaTeX macro or an explicit $…$ span) but are
+# never picked up by generic candidate discovery. ∂ is the reverse — it IS in
+# MATH_CHARS, so making it tokenizable on its own would turn today's reviewable
+# parse error for shapes like ∂^2u/∂x^2 into a silently wrong conversion. Bare ∂
+# therefore stays untokenizable; ∂f/∂x is handled earlier, by preprocess_formula.
 TOKEN_RE = re.compile(
     r"\s*(?:"
     r"(?P<MATRIX_OPEN>\[\[)|"
     r"(?P<MATRIX_CLOSE>\]\])|"
     r"(?P<NUMBER>\d+(?:[\.,]\d+)?)|"
     r"(?P<IF>if\b)|"
-    r"(?P<IDENT>sqrt|lim|exp|sin|cos|tan|Delta|pi|inf|e[pv]|pPAIR|DERV\d+|[A-Za-z][A-Za-z0-9]*|[Α-Ωα-ω∞∫∑∏ℝℂℕℤℚℙℍℓ∂∇])|"
+    r"(?P<IDENT>sqrt|lim|exp|sin|cos|tan|Delta|pi|inf|e[pv]|pPAIR|DERV\d+|[A-Za-z][A-Za-z0-9]*|[Α-Ωα-ω∞∫∑∏ℝℂℕℤℚℙℍℓ∇])|"
     r"(?P<OP><->|<=|>=|!=|<<|>>|~=|->|=>|\+/-|[+\-*/^=<>!±∓≠≤≥≈≅→⇒⇌·×÷_∈∉⊂⊆⊃⊇∪∩∧∨⊕⊗∝≡])|"
     r"(?P<LPAREN>[\(\[\{])|(?P<RPAREN>[\)\]\}])|(?P<COMMA>,)|(?P<SEMI>;)|"
     r"(?P<ELLIPSIS>…)"

@@ -50,22 +50,35 @@ def test_supported_formula_structures(source: str, expected: str) -> None:
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
-        ("∇", "mi"),
-        ("∂", "mi"),
-        ("a ∓ b", "mo"),
         ("∓x", "mo"),
         ("±x", "mo"),
-        ("∇f = 0", "mi"),
     ],
 )
 def test_new_symbol_characters_are_tokenized(source: str, expected: str) -> None:
     assert expected in local_tags(source)
 
 
+@pytest.mark.parametrize("source", ["a ∓ b", "∓x", "∇f = 0", "∇"])
+def test_new_symbol_characters_reach_the_output(source: str) -> None:
+    text = "".join(formula_to_mathml(source).itertext())
+    assert ("∓" in text) or ("∇" in text)
+
+
+def test_bare_partial_still_raises() -> None:
+    # ∂ is in MATH_CHARS, so a parse failure here is what keeps shapes like
+    # ∂^2u/∂x^2 out of automatic conversion. See the comment above TOKEN_RE.
+    with pytest.raises(FormulaError):
+        formula_to_mathml("∂^2u/∂x^2 = 0")
+
+
 def test_partial_derivative_preprocessing_still_wins_over_bare_partial() -> None:
-    # ∂f/∂x must keep going through preprocess_formula into a stacked fraction,
-    # not become three separate identifiers now that ∂ tokenizes on its own.
-    assert "mfrac" in local_tags("∂f/∂x")
+    # ∂f/∂x must keep going through preprocess_formula into a stacked fraction
+    # with ∂f over ∂x — a bare "mfrac appears somewhere" assertion would also
+    # pass for the wrong parse (∂·f/∂)·x, so assert the operands.
+    fraction = formula_to_mathml("∂f/∂x").find(".//{*}mfrac")
+    assert fraction is not None
+    assert "".join(fraction[0].itertext()) == "∂f"
+    assert "".join(fraction[1].itertext()) == "∂x"
 
 
 @pytest.mark.parametrize("source", ["x @ 2", "(x]", "x +", ")"])
