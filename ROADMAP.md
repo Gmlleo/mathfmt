@@ -118,6 +118,26 @@ limited to necessary security and compatibility maintenance.
   `127.0.0.1`, running the same conservative convert pipeline. No new runtime
   dependency; no change to the stable Python API or CLI commands added in v1.0.
 
+## v1.2.0 — GUI Review & Reverse Conversion · GUI 审核与反向转换 (released 2026-09-03)
+
+**Focus:** Make the GUI safer to use unsupervised, give clearer feedback on parse
+failures, and close the OMML → text gap for tooling built on top of MathFmt.
+
+- [x] `mathfmt gui` shows every scanned candidate as a checklist (source text,
+  confidence, parse status/reason) before converting, pre-checked with the same
+  conservative defaults as `mathfmt convert`.
+- [x] `FormulaError.to_dict()` includes a plain-language `hint` for common
+  mistakes — mismatched brackets, a `cases`/`{...}` branch missing `if`, wrong
+  argument counts — surfaced in scan/apply reports and the GUI's candidate list.
+- [x] `omml_to_text(omath_elem)`: the reverse of `mathml_to_omml_py`, converting a
+  native OMML equation back to MathFmt's linear formula syntax.
+- [x] `packaging/build_exe.py`: an optional standalone GUI executable build for
+  people without Python installed, smoke-tested in CI on every push. Building and
+  distributing it remains a manual, deliberate step outside the release pipeline.
+
+All additions are backward-compatible per `docs/api.md`; no change to the stable
+Python API or CLI commands added through v1.1.
+
 ---
 
 ## Maintenance Feedback · 维护反馈

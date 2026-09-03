@@ -2,7 +2,7 @@
 
 All notable changes to MathFmt are documented here.
 
-## [Unreleased]
+## [1.2.0] - 2026-09-03
 
 ### Added
 - `mathfmt gui` now shows every scanned formula candidate as a checklist (source
