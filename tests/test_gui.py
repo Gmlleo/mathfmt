@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import threading
@@ -73,6 +74,35 @@ def _post_apply(
             return resp.status, json.loads(resp.read())
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read())
+
+
+def test_ensure_utf8_console_streams_fixes_a_non_utf8_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test: serve()'s Chinese status text used to crash the server.
+
+    A Windows console on a non-UTF-8 codepage, or stdout/stderr redirected to
+    a file or pipe, can leave `print()` unable to encode the banner's Chinese
+    punctuation, raising UnicodeEncodeError before `serve_forever()` is ever
+    reached (observed for real: a frozen build's stdout redirected to a log
+    file on a GitHub Actions Windows runner).
+    """
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="ascii")
+    with pytest.raises(UnicodeEncodeError):
+        print("按 Ctrl+C 停止服务", file=stream)
+
+    monkeypatch.setattr(gui.sys, "stdout", stream)
+    gui._ensure_utf8_console_streams()
+    print("按 Ctrl+C 停止服务", file=gui.sys.stdout)  # must not raise
+
+
+def test_ensure_utf8_console_streams_tolerates_a_non_reconfigurable_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NoReconfigure:
+        pass
+
+    monkeypatch.setattr(gui.sys, "stdout", NoReconfigure())
+    monkeypatch.setattr(gui.sys, "stderr", NoReconfigure())
+    gui._ensure_utf8_console_streams()  # must not raise
 
 
 def test_index_page_is_served(running_server: Any) -> None:

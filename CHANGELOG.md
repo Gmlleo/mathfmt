@@ -36,6 +36,15 @@ All notable changes to MathFmt are documented here.
   attaching it to a GitHub Release) remains a manual, deliberate step outside
   `publish.yml`.
 
+### Fixed
+- `mathfmt gui` (and the standalone executable) no longer crashes with
+  `UnicodeEncodeError` immediately after printing its startup URL when stdout
+  isn't UTF-8 capable — a non-UTF-8 Windows console codepage, or stdout/stderr
+  redirected to a file or pipe, which drops the console's codepage entirely.
+  `serve()` now reconfigures both streams to UTF-8 (with lossy fallback) before
+  printing anything. Found by the new exe smoke test above, which redirects
+  output exactly this way.
+
 ## [1.1.0] - 2026-08-31
 
 ### Added

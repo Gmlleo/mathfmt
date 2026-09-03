@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import secrets
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -367,6 +368,25 @@ def _create_server(host: str, port: int, xsl_path: Path | None) -> _Server:
     return _Server((host, port), _Handler, base_dir=base_dir, xsl_path=xsl_path)
 
 
+def _ensure_utf8_console_streams() -> None:
+    """Make stdout/stderr tolerate the Chinese status text this module prints.
+
+    A Windows console using a non-UTF-8 codepage — or stdout/stderr
+    redirected to a file or pipe, which drops the console's codepage
+    entirely and falls back to the platform's default text encoding — can
+    leave `print()` unable to encode the Chinese punctuation in the startup
+    banner, raising UnicodeEncodeError and crashing the server before it
+    ever reaches `serve_forever()`. `reconfigure()` is a no-op when the
+    stream is already UTF-8 capable; swallow the rare case where a stream
+    doesn't support reconfiguring at all (e.g. fully detached).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def serve(
     *,
     host: str = "127.0.0.1",
@@ -375,6 +395,7 @@ def serve(
     open_browser: bool = True,
 ) -> None:
     """Start the local GUI server and block until interrupted (Ctrl+C)."""
+    _ensure_utf8_console_streams()
     server = _create_server(host, port, xsl_path)
     try:
         bound_host, bound_port = server.server_address[0], server.server_address[1]
