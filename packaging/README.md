@@ -22,9 +22,13 @@ command.
 - `gui_entry.py` is a thin wrapper around `mathfmt.gui.serve()` — no source,
   public API, or CLI behavior changes. See `docs/api.md` for the actual stability
   contract; this directory is outside it.
-- The build is **not** part of `.github/workflows/publish.yml` — running
-  `build_exe.py` and distributing the result (e.g. attaching it to a GitHub
-  Release) is a manual, deliberate step, not something a tag push triggers.
+- `.github/workflows/ci.yml` runs `build_exe.py` plus `smoke_test.py` (launches
+  the built binary, confirms it serves its GUI page, stops it) on every push and
+  PR, so a broken build/entry point fails CI instead of surfacing only when
+  someone next runs this manually. That job only **verifies** the build works;
+  distributing the result (e.g. attaching it to a GitHub Release) is still a
+  manual, deliberate step, not something `.github/workflows/publish.yml` or a
+  tag push does.
 - Verify a fresh build on a clean machine (or at least a clean virtual machine)
   before distributing it — PyInstaller bundles what it finds in the *build*
   environment, so a build made from a repo with extra local packages installed
