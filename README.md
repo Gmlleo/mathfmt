@@ -120,10 +120,11 @@ MathFmt 1.0 also supports trusted custom formula recognizers through repeatable
 
 ## Status
 
-**Stable (v1.1.0).** Feature-complete cross-platform OMML conversion with a stable
+**Stable (v1.2.0).** Feature-complete cross-platform OMML conversion with a stable
 Python API, deterministic custom recognizers, structured safety reports, batch
 processing, WPS/LibreOffice compatibility checks, a 100-page performance gate, and
-an optional local drag-and-drop GUI (`mathfmt gui`).
+an optional local drag-and-drop GUI (`mathfmt gui`) with a candidate review step
+and a reverse OMML → text converter for tooling built on top of MathFmt.
 
 ---
 
@@ -212,6 +213,7 @@ pip install --upgrade mathfmt
 | **0.5.0** (2026-08-07) | 批量转换；WPS 离线兼容性检查与 Windows 往返渲染验收 |
 | **1.0.0** (2026-08-08) | 稳定 API 与 SemVer；插件钩子；100 页性能门禁；Python 3.14 |
 | **1.1.0** (2026-08-31) | `mathfmt gui`：本地浏览器拖拽界面，无需终端命令 |
+| **1.2.0** (2026-09-03) | `mathfmt gui` 转换前逐条审核公式；解析错误附带提示；`omml_to_text` 反向转换；可选独立 exe 打包 |
 
 ### 更多文档
 
@@ -320,6 +322,7 @@ pip install --upgrade mathfmt
 | **0.5.0** (2026-08-07) | Batch conversion, offline WPS compatibility lint, and Windows WPS round-trip rendering QA |
 | **1.0.0** (2026-08-08) | Stable API and SemVer, plugin hooks, 100-page performance gate, Python 3.14 |
 | **1.1.0** (2026-08-31) | `mathfmt gui`: a local browser drag-and-drop interface, no terminal commands needed |
+| **1.2.0** (2026-09-03) | `mathfmt gui` per-candidate review before converting; plain-language parse-error hints; `omml_to_text` reverse conversion; optional standalone exe packaging |
 
 ### Further Reading
 
