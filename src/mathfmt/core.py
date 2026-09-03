@@ -376,8 +376,8 @@ TOKEN_RE = re.compile(
     r"(?P<MATRIX_CLOSE>\]\])|"
     r"(?P<NUMBER>\d+(?:[\.,]\d+)?)|"
     r"(?P<IF>if\b)|"
-    r"(?P<IDENT>sqrt|lim|exp|sin|cos|tan|Delta|pi|inf|e[pv]|pPAIR|DERV\d+|[A-Za-z][A-Za-z0-9]*|[Α-Ωα-ω∞∫∑∏ℝℂℕℤℚℙℍℓ])|"
-    r"(?P<OP><->|<=|>=|!=|<<|>>|~=|->|=>|\+/-|[+\-*/^=<>!±≠≤≥≈≅→⇒⇌·×÷_∈∉⊂⊆⊃⊇∪∩∧∨⊕⊗∝≡])|"
+    r"(?P<IDENT>sqrt|lim|exp|sin|cos|tan|Delta|pi|inf|e[pv]|pPAIR|DERV\d+|[A-Za-z][A-Za-z0-9]*|[Α-Ωα-ω∞∫∑∏ℝℂℕℤℚℙℍℓ∂∇])|"
+    r"(?P<OP><->|<=|>=|!=|<<|>>|~=|->|=>|\+/-|[+\-*/^=<>!±∓≠≤≥≈≅→⇒⇌·×÷_∈∉⊂⊆⊃⊇∪∩∧∨⊕⊗∝≡])|"
     r"(?P<LPAREN>[\(\[\{])|(?P<RPAREN>[\)\]\}])|(?P<COMMA>,)|(?P<SEMI>;)|"
     r"(?P<ELLIPSIS>…)"
     r")"
@@ -609,6 +609,7 @@ class Parser:
             "+",
             "-",
             "±",
+            "∓",
             "∪",
             "∩",
             "∧",
@@ -662,7 +663,7 @@ class Parser:
         return node
 
     def parse_unary(self) -> Node:
-        if self.current.kind == "OP" and self.current.value in {"+", "-"}:
+        if self.current.kind == "OP" and self.current.value in {"+", "-", "±", "∓"}:
             return Node("unary", self.advance().value, (self.parse_unary(),))
         return self.parse_atom()
 

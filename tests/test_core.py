@@ -47,6 +47,27 @@ def test_supported_formula_structures(source: str, expected: str) -> None:
     assert expected in local_tags(source)
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("∇", "mi"),
+        ("∂", "mi"),
+        ("a ∓ b", "mo"),
+        ("∓x", "mo"),
+        ("±x", "mo"),
+        ("∇f = 0", "mi"),
+    ],
+)
+def test_new_symbol_characters_are_tokenized(source: str, expected: str) -> None:
+    assert expected in local_tags(source)
+
+
+def test_partial_derivative_preprocessing_still_wins_over_bare_partial() -> None:
+    # ∂f/∂x must keep going through preprocess_formula into a stacked fraction,
+    # not become three separate identifiers now that ∂ tokenizes on its own.
+    assert "mfrac" in local_tags("∂f/∂x")
+
+
 @pytest.mark.parametrize("source", ["x @ 2", "(x]", "x +", ")"])
 def test_formula_errors_are_explicit(source: str) -> None:
     with pytest.raises(FormulaError):
