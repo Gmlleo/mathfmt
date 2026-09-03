@@ -35,11 +35,18 @@ LaTeX 形态。
 新增独立模块做**纯文本层的宏展开**：`LaTeX 文本 → MathFmt 线性语法`，其结果再交给
 现有的 `preprocess_formula` → `tokenize` → `Parser` 管线。
 
-**不修改 `TOKEN_RE`，不修改 `Parser` 的既有分支。**
-
 理由：本版本目标子集中的绝大多数构造，MathFmt 线性语法里都已有等价写法（例外见
 第 3 节）。把 LaTeX 处理隔离在一个不认识 lxml、不认识 MathML 的模块里，可以独立
-测试；并且非 LaTeX 输入的执行路径一个字节都不变，这是"现有行为零回归"最强的保证。
+测试；并且非 LaTeX 输入的执行路径一个字节都不变。
+
+**真正的不变量是零回归，不是"不碰 `TOKEN_RE`"。** 本版本对词法器的改动严格限定为：
+向既有字符类**新增今天只能产生词法错误的字符**（`∇` `∓` `∂`），不修改任何既有分支的
+匹配规则。这类新增不可能改变任何今天能成功转换的输入的行为。同样地，
+`MATH_CHARS`（`core.py:66`）**保持不动** —— 它控制的是通用扫描的跨度切分而非解析
+能力，改动它会真实改变现有行为（例如纯文本 `∇f = 0` 今天扫描为 `f = 0`），是本版本
+唯一实际的回归风险来源。代价是：不含宏也不含定界符的裸 Unicode 符号仍需放进
+`$...$` 才能整体转换——这与别名一节既有的"别名影响解析，不影响候选发现"是同一条
+约定。
 
 ### 2.2 接口
 
@@ -65,6 +72,7 @@ def contains_latex_macro(text: str) -> bool:
 |---|---|---|
 | `\frac{a}{b}`、`\dfrac`、`\tfrac` | `(a)/(b)` | binary `/` → `m:mfrac` |
 | `\sqrt{x}` | `sqrt(x)` | `Node("sqrt")` → `m:msqrt` |
+| `\sqrt[n]{x}` | `root(x,n)` | 新增原生构造，见第 3.3 节 |
 | `x^{n+1}`、`x_{i}` | `x^(n+1)`、`x_(i)` | `msup` / `msub` / `msubsup` |
 | `\left( ... \right)` | `( ... )` | `parse_group` |
 | `\sum_{i=1}^{n} f` | `sum(i=1,n) f` | `Node("nary")` 带上下限 |
@@ -77,18 +85,24 @@ def contains_latex_macro(text: str) -> bool:
 |---|---|
 | `\alpha` … `\omega`、`\Gamma` … `\Omega` | 对应 Unicode 字母（词法器已接受 `[Α-Ωα-ω]`） |
 | `\leq \geq \neq \approx \equiv` | `≤ ≥ ≠ ≈ ≡` |
-| `\pm \times \cdot \div` | `± × · ÷` |
+| `\pm \mp \times \cdot \div` | `± ∓ × · ÷` |
 | `\to \rightarrow \Rightarrow \leftrightarrow` | `→ → ⇒ <->` |
 | `\in \notin \subset \subseteq \cup \cap` | `∈ ∉ ⊂ ⊆ ∪ ∩` |
-| `\infty` | `∞` |
+| `\infty \partial \nabla` | `∞ ∂ ∇` |
 | `\sin \cos \tan \log \ln \exp` | 去掉反斜杠的同名函数 |
 | `\,` `\;` `\!` `\quad` `\qquad` | 空字符串（间距宏丢弃） |
 
-`\partial` 仅在偏导形态中受支持：`\partial f / \partial x` 展开为 `∂f/∂x`，由现有
-预处理（`core.py:387`）转成 `partial(f,x)`。**单独出现的 `\partial` 不在支持范围内**
-—— `TOKEN_RE` 的 IDENT 字符类不含 `∂`，展开后会触发词法错误。同理 `\nabla`（`∇`）
-与 `\mp`（`∓`）也不在本版本范围内：前者不在 IDENT 字符类中，后者不在 OP 字符类与
-`OP_add` 集合中；支持它们就必须修改 `TOKEN_RE`，与第 2.1 节的前提冲突。见第 10 节。
+`∂` `∇` `∓` 三个字符今天不在 `TOKEN_RE` 的字符类中，展开后会触发词法错误，因此需要
+按第 2.1 节的规则做**纯新增**的词法扩展：
+
+| 字符 | 改动 | MathML/OMML 侧的工作量 |
+|---|---|---|
+| `∂` `∇` | 加入 IDENT 字符类 | **零**：`identifier_mathml`（`core.py:842`）的默认分支 `return mml("mi", value)` 直接接住 |
+| `∓` | 加入 OP 字符类，并加入 `parse_add`（`core.py:606`）与 `parse_unary`（`core.py:664`）的运算符集合 | **零**：binary 的默认分支 `mrow(left, mml("mo", op), right)`（`core.py:966`）直接接住 |
+
+`\partial` 在偏导形态 `\partial f / \partial x` 中仍走既有路径：展开为 `∂f/∂x` 后由
+预处理（`core.py:387`）转成 `partial(f,x)`；预处理未消费的独立 `∂` 则由上面的 IDENT
+扩展接住。`parse_unary` 加入 `∓` 是为了让 `∓x` 这类前缀写法成立。
 
 **环境**
 
@@ -98,8 +112,8 @@ def contains_latex_macro(text: str) -> bool:
 | `\begin{cases} 0 & x<0 \\ 1 & x\ge 0 \end{cases}` | `{0, x<0; 1, x>=0}` | `piecewise` |
 | `\begin{aligned} a=b \\ c=d \end{aligned}`（含 `align`/`align*`） | `a = b \\ c = d` | `split_multiline_formula` |
 
-另有两个构造需要新增原生能力，不在上表中，见第 3 节：`\bar \overline \hat \vec
-\dot \ddot`（重音）与 `\text{} \mathrm{}`（直立文本）。
+另有三个构造需要新增原生能力，见第 3 节：`\bar \overline \hat \vec \dot \ddot`
+（重音）、`\text{} \mathrm{}`（直立文本）与 `\sqrt[n]{}`（n 次根）。
 
 ### 2.4 展开顺序
 
@@ -114,7 +128,7 @@ def contains_latex_macro(text: str) -> bool:
 必须原样保留交给 `split_multiline_formula`（`core.py:1368`）；在其它语境中出现的
 `\\` 视为不支持并报错。
 
-## 3. 新增的原生能力（仅此两项）
+## 3. 新增的原生能力（仅此三项）
 
 ### 3.1 重音
 
@@ -143,16 +157,26 @@ accent(x, bar)   accent(F, vec)   accent(y, hat)   accent(q, dot)   accent(q, dd
 `\text{已知}` 与 `\mathrm{d}` 需要一个直立文本原子。复用化学式已在使用的直立
 `m:mtext` 通路，展开为 `text(已知)`，同样作为 MathFmt 原生构造加入解析器。
 
-## 4. 不支持 `\sqrt[n]{x}`
+### 3.3 n 次根
 
 `parse_atom`（`core.py:771`）中 `sqrt` 只接受一个分组，`node_to_mathml`
-（`core.py:933`）只有 `m:msqrt` 没有 `m:mroot`。`sqrt(x,3)` 会把 "x, 3" 整体塞进
-根号内**静默错渲**。
+（`core.py:933`）只有 `m:msqrt` 没有 `m:mroot`。因此 **`\sqrt[3]{x}` 绝不可展开为
+`sqrt(x,3)`** —— 那会把 "x, 3" 整体塞进根号内**静默错渲**。它需要一个真正的新构造，
+与重音同构：
 
-因此 n 次根不在 v1.3 范围内，且 `expand_latex` 必须对 `\sqrt[` **显式抛
-`FormulaError`**（hint 指明不支持 n 次根），绝不可展开为 `sqrt(x,3)`。错误优于错渲。
+```
+root(x, 3)
+```
 
-## 5. 扫描器
+- 新 AST 节点 `root`，两个参数：被开方式与次数。
+- MathML：`m:mroot`。
+- OMML：`_radical`（`omml.py:199`）已经在生成 `m:rad` + `m:radPr/m:degHide` + 一个
+  **空的 `m:deg` 元素**。n 次根即：`degHide` 置 `0`，并把次数填入那个已经存在的
+  `m:deg`。`m:msqrt` 的既有路径（`degHide=1` + 空 `m:deg`）保持不变。
+- `omml_to_text` 增加 `m:rad` 带非空 `m:deg` → `root(x,3)` 的反向支持。
+- 教材与试卷场景中立方根很常见，而本工具正是面向教材、试卷与技术报告的。
+
+## 4. 扫描器
 
 两处增量。**不放宽 `MATH_CHARS`**（不加入反斜杠），因此通用扫描的行为完全不变，
 `C:\Users\gml85` 一类路径不可能成为候选。
@@ -168,7 +192,7 @@ accent(x, bar)   accent(F, vec)   accent(y, hat)   accent(q, dot)   accent(q, dd
 `likely_code` 的代码排除逻辑保持不变；显式定界符跨度沿用既有的"只扫描显式跨度"
 处理方式。
 
-## 6. GUI 预览与行内编辑
+## 5. GUI 预览与行内编辑
 
 - `/scan` 返回的每条候选新增两个字段：`linear`（解析用文本）与 `mathml`
   （序列化后的 `<math>` 字符串）。
@@ -182,7 +206,7 @@ accent(x, bar)   accent(F, vec)   accent(y, hat)   accent(q, dot)   accent(q, dd
   支持的"手工修改 candidates.json"审核流程，转换侧无需新逻辑。
 - 浏览器不支持 MathML 时降级为纯文本并给出提示，不视为错误。
 
-## 7. 错误处理
+## 6. 错误处理
 
 - 子集外的宏一律抛 `FormulaError`，`hint` 点名具体宏，例如
   `MathFmt 不支持 \substack`。绝不猜测 —— 与 v1.2 为 `omml_to_text` 定下的
@@ -194,12 +218,16 @@ accent(x, bar)   accent(F, vec)   accent(y, hat)   accent(q, dot)   accent(q, dd
   `parse_error_details`、apply 报告的 `error_details` 和 GUI 候选列表中，无需新的
   错误通道。
 
-## 8. 测试
+## 7. 测试
 
 - 新增 `tests/test_latex.py`：表驱动覆盖第 2.3 节列出的**每一个**宏；每个不支持的
-  宏都必须报错且 `hint` 非空；`\sqrt[3]{x}` 必须报错而非静默错渲。
-- `test_core.py`：`accent` 与 `text` 的 解析 → MathML → OMML → `omml_to_text` 往返；
-  `mover` 不带 `accent` 属性时仍走 `m:limUpp`。
+  宏都必须报错且 `hint` 非空；`\sqrt[3]{x}` 必须展开为 `root(x,3)` 而**不是**
+  `sqrt(x,3)`（后者会静默错渲，是本设计明确防范的失败模式）。
+- `test_core.py`：`accent`、`text`、`root` 三者的 解析 → MathML → OMML →
+  `omml_to_text` 往返；`mover` 不带 `accent` 属性时仍走 `m:limUpp`；`m:msqrt` 仍生成
+  `degHide=1` 且 `m:deg` 为空。
+- `test_core.py` 词法扩展：`∂`、`∇` 可作为独立标识符解析；`a ∓ b` 与前缀 `∓x` 均可
+  解析；`∂f/∂x` 仍走既有预处理转成 `partial(f,x)`。
 - `test_core.py` 扫描：`\( ... \)` 与 `\[ ... \]` 为高置信；裸宏为中置信；
   `C:\Users\gml85` 不成为候选；`$12.00$` 仍被忽略。
 - `test_gui.py`：`/preview` 的成功与失败路径、编辑后的 linear 确实进入产物、
@@ -208,22 +236,22 @@ accent(x, bar)   accent(F, vec)   accent(y, hat)   accent(q, dot)   accent(q, dd
   LibreOffice 渲染门禁。
 - **回归保证**：现有测试一行不改即应全部通过。
 
-## 9. 文档
+## 8. 文档
 
 - `docs/formula-syntax.md` 新增第 10 节 "LaTeX input subset"：完整支持表 + 明确的
-  不支持清单（含 `\sqrt[n]{}`、`\nabla`/`\mp`/裸 `\partial` 与错误列号的已知限制）。
+  不支持清单（含错误列号的已知限制）。同时更新第 2 节的词法器说明（新增 `∂` `∇` `∓`）
+  与第 4 节的 MathML 映射表（新增 `accent` / `text` / `root` 三个节点）。
 - `docs/workflow.md`：LaTeX 文档的扫描/审核流程说明。
 - `README.md`：双语简述。
 - `CHANGELOG.md`：v1.3.0 条目。
 - `ROADMAP.md`：v1.3 条目 + 策略修订说明。
 - `docs/api.md`：无变化（未新增导出符号）。
 
-## 10. 明确不做（YAGNI）
+## 9. 明确不做（YAGNI）
 
 - LaTeX 输出 / DOCX → TeX 反向导出
 - `\substack` `\overbrace` `\underbrace` `\mathcal` `\mathbb` `\operatorname` `\binom`
-- `\sqrt[n]{x}`（见第 4 节）
-- `\nabla`、`\mp`，以及单独出现的 `\partial`（见第 2.3 节）
 - 原始 LaTeX 文本中的精确错误列号
+- 放宽 `MATH_CHARS`（裸 Unicode 符号的候选发现，见第 2.1 节）
 - GUI 中的段落上下文高亮
 - 用户自定义宏（`\newcommand`）
