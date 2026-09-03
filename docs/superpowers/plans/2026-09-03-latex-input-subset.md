@@ -34,7 +34,17 @@ This plan uses a **quoted string atom** instead: `\text{已知}` expands to `"�
 
 ---
 
-## Task 1: Tokenizer additions — `∂` `∇` `∓`
+## Task 1: Tokenizer additions — `∇` `∓` (`∂` withdrawn during implementation)
+
+> **Revised after code review.** This task originally added `∂` as well. It must not:
+> `∂` is already in `MATH_CHARS` (`core.py:70`), so `∂` spans are discovered by the
+> scanner and were protected only by `formula_to_mathml` raising, which marks the
+> candidate `selected: false`. Making `∂` tokenizable turned `∂^2u/∂x^2 = 0` from a
+> reviewable parse error into a silently wrong auto-conversion — the preprocessing
+> only rewrites the plain `∂ IDENT / ∂ IDENT` shape, and left-associative division
+> then yields `(∂²·u / ∂) · x²`. Keep `∇` and `∓`; drop `∂`. See the revision note in
+> spec §2.3. The lesson generalises: "this character can only produce a tokenize
+> error today" proves lexer-level safety, not pipeline-level safety.
 
 **Files:**
 - Modify: `src/mathfmt/core.py:373-383` (TOKEN_RE), `src/mathfmt/core.py:606-620` (`parse_add`), `src/mathfmt/core.py:664-667` (`parse_unary`)
@@ -1596,7 +1606,7 @@ git commit -m "test: add a LaTeX acceptance document"
 
 In `docs/formula-syntax.md`:
 
-- Section 2 (Tokenizer): add `∂` `∇` to the IDENT character list, `∓` to OP, and the new `STRING : "…"` token.
+- Section 2 (Tokenizer): add `∇` to the IDENT character list, `∓` to OP, and the new `STRING : "…"` token. Do not list `∂` — see the Task 1 revision note.
 - Section 3 (Grammar): add `accent`, `root`, and the quoted text atom to the `atom` production.
 - Section 4 (MathML Output Mapping): add three rows — `accent` → `m:mover accent="true"`, `root` → `m:mroot`, `text` → `m:mtext`.
 - New section 10, "LaTeX input subset": the complete supported table from spec §2.3, and an explicit unsupported list — `\substack`, `\overbrace`, `\underbrace`, `\mathcal`, `\mathbb`, `\operatorname`, `\binom`, `\newcommand`, and any environment other than `matrix`/`pmatrix`/`bmatrix`/`cases`/`aligned`/`align`.
@@ -1605,6 +1615,7 @@ Document these three limitations in the same section:
 
 1. A parse error's column number refers to the expanded text, not the original LaTeX; the macro name in the error's `hint` is the reliable locator.
 2. Bare Unicode symbols (`∇f = 0` with no macro and no delimiter) are parsed but not discovered by the scanner — wrap them in `$…$`, the same rule the alias section already states.
+2b. A standalone `\partial` / `∂` is not supported, and higher-order or mixed partials (`∂^2u/∂x^2`, `∂^2f/∂x∂y`) still report a parse error for manual review rather than converting. Only the `∂f/∂x` shape converts. State this plainly — it is a deliberate safety choice, not an oversight.
 3. A quoted text atom reverses through `omml_to_text` as its bare content, without the quotes, matching how chemistry formulas reverse.
 
 - [ ] **Step 2: Update the remaining docs**

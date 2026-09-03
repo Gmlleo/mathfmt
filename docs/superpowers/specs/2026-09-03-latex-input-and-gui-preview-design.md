@@ -88,21 +88,44 @@ def contains_latex_macro(text: str) -> bool:
 | `\pm \mp \times \cdot \div` | `± ∓ × · ÷` |
 | `\to \rightarrow \Rightarrow \leftrightarrow` | `→ → ⇒ <->` |
 | `\in \notin \subset \subseteq \cup \cap` | `∈ ∉ ⊂ ⊆ ∪ ∩` |
-| `\infty \partial \nabla` | `∞ ∂ ∇` |
+| `\infty \nabla` | `∞ ∇` |
 | `\sin \cos \tan \log \ln \exp` | 去掉反斜杠的同名函数 |
 | `\,` `\;` `\!` `\quad` `\qquad` | 空字符串（间距宏丢弃） |
 
-`∂` `∇` `∓` 三个字符今天不在 `TOKEN_RE` 的字符类中，展开后会触发词法错误，因此需要
-按第 2.1 节的规则做**纯新增**的词法扩展：
+`∇` `∓` 今天不在 `TOKEN_RE` 的字符类中，展开后会触发词法错误，因此需要按第 2.1 节的
+规则做**纯新增**的词法扩展：
 
 | 字符 | 改动 | MathML/OMML 侧的工作量 |
 |---|---|---|
-| `∂` `∇` | 加入 IDENT 字符类 | **零**：`identifier_mathml`（`core.py:842`）的默认分支 `return mml("mi", value)` 直接接住 |
+| `∇` | 加入 IDENT 字符类 | **零**：`identifier_mathml`（`core.py:842`）的默认分支 `return mml("mi", value)` 直接接住 |
 | `∓` | 加入 OP 字符类，并加入 `parse_add`（`core.py:606`）与 `parse_unary`（`core.py:664`）的运算符集合 | **零**：binary 的默认分支 `mrow(left, mml("mo", op), right)`（`core.py:966`）直接接住 |
 
-`\partial` 在偏导形态 `\partial f / \partial x` 中仍走既有路径：展开为 `∂f/∂x` 后由
-预处理（`core.py:387`）转成 `partial(f,x)`；预处理未消费的独立 `∂` 则由上面的 IDENT
-扩展接住。`parse_unary` 加入 `∓` 是为了让 `∓x` 这类前缀写法成立。
+`parse_unary` 同时加入 `±`：否则本版本声称支持的 `\pm x` 会失败，而 `\mp x` 却成立。
+两者今天都报错，因此仍是纯新增。
+
+#### 独立的 `\partial` 不在支持范围内（Task 1 实施时修订）
+
+本节初稿把 `∂` 与 `∇` `∓` 同等对待，理由是三者今天都只能产生词法错误。**这个论证对
+`∂` 不成立**，Task 1 的代码质量审查用端到端验证推翻了它：
+
+`∂` **已经在 `MATH_CHARS` 里**（`core.py:70`）。含 `∂` 的跨度一直会被扫描器发现；
+过去保护它们的正是 `formula_to_mathml` 抛出 `FormulaError` —— `scan_docx` 据此把候选
+标为 `selected: false`（`core.py:1809`）交人工审核。**解析失败本身就是保护机制。**
+
+让 `∂` 可词法化就拆掉了这层保护：`PARTIAL_DERIVATIVE_SCAN_RE`（`core.py:214`）只匹配
+`∂ IDENT / ∂ IDENT`，`∂^2u/∂x^2 = 0` 里的 `^2` 使预处理不再接管，随后 `parse_mul` 的
+左结合除法把它解析成 `(∂²·u / ∂) · x²` —— 分母只剩裸 `∂`，`x²` 逃到分式之外。于是一个
+响亮的、可审核的解析错误，变成了被 `mathfmt convert` 默认自动应用的静默错误公式。
+`∂^2f/∂x∂y` 与 `∂(f)/∂x` 同理。跨后端校验也拦不住：它比对的是同一棵错误 AST 的两次
+正向转换，两边一致。
+
+因此 `∂` 不加入 IDENT 字符类。`\partial f / \partial x` 的偏导形态不受影响 —— 它展开为
+`∂f/∂x` 后由预处理（`core.py:387`）转成 `partial(f,x)`，这条路径从来不需要 `∂` 可
+词法化。
+
+**推广到本设计的其余部分：**"该字符今天只能产生词法错误"只证明了*词法层*的安全，
+没有证明*管线层*的安全。凡是已在 `MATH_CHARS` 中的字符，其解析失败可能正在承担安全
+职责，必须单独核对。`∇` 与 `∓` 都不在 `MATH_CHARS` 中，故不受此影响。
 
 **环境**
 
@@ -253,5 +276,8 @@ root(x, 3)
 - `\substack` `\overbrace` `\underbrace` `\mathcal` `\mathbb` `\operatorname` `\binom`
 - 原始 LaTeX 文本中的精确错误列号
 - 放宽 `MATH_CHARS`（裸 Unicode 符号的候选发现，见第 2.1 节）
+- 单独出现的 `\partial`（见第 2.3 节的修订说明）
+- 高阶与混合偏导（`∂^2u/∂x^2`、`∂^2f/∂x∂y`）：教材高频，但属于新功能而非回归修复，
+  本版本维持现状——继续报解析错误、交人工审核，不静默转换
 - GUI 中的段落上下文高亮
 - 用户自定义宏（`\newcommand`）
