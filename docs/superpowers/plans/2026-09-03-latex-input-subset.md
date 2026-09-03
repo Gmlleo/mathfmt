@@ -1623,6 +1623,8 @@ Document these three limitations in the same section:
 - `docs/workflow.md`: a short subsection on scanning a LaTeX document — delimited spans are high confidence, bare macros are medium and need review.
 - `README.md`: one bilingual line in the feature list.
 - `CHANGELOG.md`: a `## [1.3.0]` section listing the LaTeX subset, the three new constructs, the scanner detectors, and the tokenizer additions.
+  - **Required, under a `### Changed` heading (not `Added`):** `accent` is now a reserved alias token, so an existing alias profile that defines `accent` will be rejected at load. Task 2's spec review flagged this: `docs/api.md` says changing *accepted input* requires a major version, and `RESERVED_ALIAS_TOKENS` had never been extended since it was created in v0.4.0 — this is the first time. It ships in a minor release because the alternative is worse (the alias branch at `core.py:824` runs before the construct dispatch, so an unreserved `accent` alias would silently shadow a documented construct instead of failing loudly at load), but it must not ship silently.
+  - Also add `accent` — and `root` and the quoted text atom once Tasks 5 and 7 land — to the reserved-name examples in `docs/formula-syntax.md`'s alias section (around line 230).
 - `ROADMAP.md`: a v1.3 entry that states plainly that this revises the stable-maintenance policy's "no supported-syntax changes" clause, and why.
 - `src/mathfmt/_version.py`: bump to `1.3.0`.
 
