@@ -727,7 +727,15 @@ class Parser:
                 source=self.source,
             )
         kind_node = arguments[1]
-        kind = kind_node.value if kind_node.kind == "identifier" else None
+        if kind_node.kind == "identifier":
+            kind = kind_node.value
+        elif kind_node.kind == "alias":
+            # An alias must not shadow an accent kind: latex.py generates
+            # accent(x,hat) internally, so a user profile defining "hat" would
+            # otherwise break \hat{x} with an error mentioning neither.
+            kind = (kind_node.meta or {}).get("name")
+        else:
+            kind = None
         if kind not in ACCENT_CHARS:
             raise FormulaError(
                 f"Unknown accent kind: {kind_node.value or kind_node.kind}",
@@ -821,7 +829,7 @@ class Parser:
                     meta={"order": str(order)},
                 )
             if name in self.aliases:
-                return Node("alias", self.aliases[name])
+                return Node("alias", self.aliases[name], meta={"name": name})
             if name in {"∫", "∏", "∑"}:
                 return self._parse_nary(name)
             if name in {"int", "sum", "prod"}:

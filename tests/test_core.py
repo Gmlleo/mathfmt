@@ -356,3 +356,34 @@ def test_accent_error_carries_a_hint() -> None:
     with pytest.raises(FormulaError) as excinfo:
         formula_to_mathml("accent(x,tilde)")
     assert excinfo.value.to_dict()["hint"]
+
+
+def test_accent_kind_is_not_shadowed_by_a_user_alias() -> None:
+    # latex.py generates accent(x,hat) from \hat{x}; a profile defining "hat"
+    # must not break it.
+    math = formula_to_mathml("accent(x,hat)", {"hat": "ĥ"})
+    assert math.find(f".//{{{MML_NS}}}mover")[1].text == "^"
+
+
+@pytest.mark.parametrize("source", ["accent(y,bar(x))", "accent(x,accent(y,bar))", "accent(y,(bar))"])
+def test_accent_kind_must_be_a_bare_name(source: str) -> None:
+    # These all have a node whose value is literally "bar"; accepting them would
+    # silently drop the second argument's structure.
+    with pytest.raises(FormulaError):
+        formula_to_mathml(source)
+
+
+def test_accent_preserves_a_compound_base() -> None:
+    math = formula_to_mathml("accent(a+b,bar)")
+    mover = math.find(f".//{{{MML_NS}}}mover")
+    assert [etree.QName(child).localname for child in mover] == ["mrow", "mo"]
+    assert "".join(mover[0].itertext()) == "a+b"
+
+
+def test_accents_nest() -> None:
+    math = formula_to_mathml("accent(accent(x,bar),vec)")
+    outer = math.find(f".//{{{MML_NS}}}mover")
+    assert outer[1].text == "→"
+    inner = outer[0]
+    assert etree.QName(inner).localname == "mover"
+    assert inner[1].text == "‾"

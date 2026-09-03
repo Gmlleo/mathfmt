@@ -307,18 +307,37 @@ In `src/mathfmt/omml.py`, change the `mover` branch of `_convert`:
             _limit_upper(elem, parent)
 ```
 
-Add the writer next to `_limit_upper`:
+**Do not pass the MathML character through to OMML.** Task 2's code review established that the two notations want different codepoints, and that copying `children[1].text` verbatim would bake the wrong one into every Word document:
+
+- MathML uses **spacing** forms, and Task 2's choices are correct there — U+203E `‾`, U+005E `^`, U+2192 `→`, U+02D9 `˙`, U+00A8 `¨` — matching what MathJax emits and the MathML operator dictionary's `&OverBar;`.
+- Word's native accents are **combining** marks: U+0305 (bar), U+0302 (hat — also OMML's implicit default when `m:chr` is omitted), U+20D7 (vec), U+0307 (dot), U+0308 (ddot). U+2192 is especially wrong: it is a full-size arrow glyph, not the compact combining vector arrow.
+
+So add an explicit mapping next to the other module constants:
+
+```python
+_OMML_ACCENT_CHARS = {"‾": "̅", "^": "̂", "→": "⃗", "˙": "̇", "¨": "̈"}
+```
+
+and the writer next to `_limit_upper`:
 
 ```python
 def _accent(elem: etree._Element, parent: etree._Element) -> None:
     children = list(elem)
+    mathml_char = (children[1].text or "").strip()
+    char = _OMML_ACCENT_CHARS.get(mathml_char)
+    if char is None:
+        raise OmmlConversionError(f"unsupported MathML accent character {mathml_char!r}")
     acc = etree.SubElement(parent, qname(M_NS, "acc"))
     acc_pr = etree.SubElement(acc, qname(M_NS, "accPr"))
     chr_el = etree.SubElement(acc_pr, qname(M_NS, "chr"))
-    chr_el.set(qname(M_NS, "val"), (children[1].text or "").strip() or "‾")
+    chr_el.set(qname(M_NS, "val"), char)
     e = etree.SubElement(acc, qname(M_NS, "e"))
     _convert(children[0], e)
 ```
+
+Raising rather than defaulting keeps the project's no-guessing rule: an accent character nobody mapped must fail loudly, not silently render as a bar.
+
+Assert the exact codepoints in the tests (`chr_el.get(qname(M_NS, "val")) == "̅"`), not just that `m:chr` exists. Task 4's reverse mapping must invert this table, not `ACCENT_CHARS`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -364,8 +383,10 @@ Expected: FAIL with `OmmlConversionError: omml_to_text does not support m:acc el
 Add the reverse table next to the other module constants in `src/mathfmt/omml.py`:
 
 ```python
-_ACCENT_NAMES = {"‾": "bar", "→": "vec", "^": "hat", "˙": "dot", "¨": "ddot"}
+_ACCENT_NAMES = {"̅": "bar", "⃗": "vec", "̂": "hat", "̇": "dot", "̈": "ddot"}
 ```
+
+Note these are the **combining** marks written into `m:accPr/m:chr` by Task 3, not the spacing characters MathML uses. Keying this table off `ACCENT_CHARS`'s spacing forms would make every round trip fail.
 
 In `_emit`, add a branch before the final `raise`:
 
