@@ -16,6 +16,7 @@ ALIAS_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*\Z")
 RESERVED_ALIAS_TOKENS = frozenset(
     {
         "Delta",
+        "accent",
         "bra",
         "braket",
         "cases",

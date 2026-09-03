@@ -70,6 +70,7 @@ MATH_CHARS = set(
     "()[]{}⟨⟩.,'′˙¨·×÷_ \t∫∑∏∂;|"
     "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω"
 )
+ACCENT_CHARS = {"bar": "‾", "vec": "→", "hat": "^", "dot": "˙", "ddot": "¨"}
 TRIM_PUNCT = " \t,，.。;；:："
 
 CHEMICAL_ELEMENTS = frozenset(
@@ -363,6 +364,8 @@ def _suggest_fix(expected: str | None) -> str | None:
         )
     if expected == "]] or ,":
         return "Separate matrix entries with ',' and rows with ';', closing the matrix with ']]'."
+    if expected == "accent kind":
+        return "An accent must be one of: bar, vec, hat, dot, ddot — e.g. accent(x,bar)."
     if expected == "number, identifier, function, matrix, or grouped expression":
         return "An operand is missing here — check for a stray operator or an empty group."
     if expected == "number, identifier, operator, or grouping symbol":
@@ -711,6 +714,30 @@ class Parser:
         kind = "partial_derivative" if name == "partial" else name
         return Node(kind, children=tuple(arguments))
 
+    def _parse_accent(self, token: Token) -> Node:
+        group = self.parse_group()
+        inner = group.children[0]
+        arguments = inner.children if inner.kind == "sequence" else (inner,)
+        if len(arguments) != 2:
+            raise FormulaError(
+                "accent requires 2 arguments",
+                position=token.start,
+                expected="2 comma-separated arguments",
+                found=str(len(arguments)),
+                source=self.source,
+            )
+        kind_node = arguments[1]
+        kind = kind_node.value if kind_node.kind == "identifier" else None
+        if kind not in ACCENT_CHARS:
+            raise FormulaError(
+                f"Unknown accent kind: {kind_node.value or kind_node.kind}",
+                position=token.start,
+                expected="accent kind",
+                found=str(kind_node.value or kind_node.kind),
+                source=self.source,
+            )
+        return Node("accent", kind, (arguments[0],))
+
     def _parse_cases(self) -> Node:
         opener = self.expect("LPAREN")
         if opener.value != "(":
@@ -807,6 +834,8 @@ class Parser:
                 return self._parse_cases()
             if name in {"partial", "bra", "ket", "braket"} and self.current.kind == "LPAREN":
                 return self._parse_physics_function(name, token)
+            if name == "accent" and self.current.kind == "LPAREN":
+                return self._parse_accent(token)
             if self.current.kind == "LPAREN":
                 group = self.parse_group()
                 if name in {"sqrt", "√"}:
@@ -941,6 +970,11 @@ def node_to_mathml(node: Node) -> etree._Element:
         root = mml("msqrt")
         root.append(node_to_mathml(node.children[0]))
         return root
+    if node.kind == "accent":
+        over = mml("mover", accent="true")
+        over.append(node_to_mathml(node.children[0]))
+        over.append(mml("mo", ACCENT_CHARS[node.value or "bar"]))
+        return over
     if node.kind == "function":
         return mrow(identifier_mathml(node.value or ""), fenced(node_to_mathml(node.children[0]), "()"))
     if node.kind == "limit":

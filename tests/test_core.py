@@ -321,3 +321,38 @@ def test_text_run_clone_preserves_formatting_and_spaces() -> None:
     text = cloned.find(qname(W_NS, "t"))
     assert text is not None and text.get("{http://www.w3.org/XML/1998/namespace}space") == "preserve"
     assert etree.QName(formula_to_mathml("x")).namespace == MML_NS
+
+
+def test_accent_produces_mover_with_accent_attribute() -> None:
+    math = formula_to_mathml("accent(x,bar)")
+    mover = math.find(f".//{{{MML_NS}}}mover")
+    assert mover is not None
+    assert mover.get("accent") == "true"
+    assert [etree.QName(child).localname for child in mover] == ["mi", "mo"]
+    assert mover[1].text == "‾"
+
+
+@pytest.mark.parametrize(
+    ("source", "char"),
+    [
+        ("accent(F,vec)", "→"),
+        ("accent(y,hat)", "^"),
+        ("accent(q,dot)", "˙"),
+        ("accent(q,ddot)", "¨"),
+    ],
+)
+def test_accent_kinds(source: str, char: str) -> None:
+    math = formula_to_mathml(source)
+    assert math.find(f".//{{{MML_NS}}}mover")[1].text == char
+
+
+@pytest.mark.parametrize("source", ["accent(x)", "accent(x,bar,y)", "accent(x,tilde)"])
+def test_invalid_accent_is_rejected(source: str) -> None:
+    with pytest.raises(FormulaError):
+        formula_to_mathml(source)
+
+
+def test_accent_error_carries_a_hint() -> None:
+    with pytest.raises(FormulaError) as excinfo:
+        formula_to_mathml("accent(x,tilde)")
+    assert excinfo.value.to_dict()["hint"]
