@@ -484,7 +484,9 @@ def omml_to_text(omath_elem: etree._Element) -> str:
     and bounded n-ary big operators (``m:nary``, e.g. ``sum(i=1,n) i`` /
     ``prod(k=1,m) k``) — an ``m:nary`` missing one of its two bounds, or
     naming an operator character this converter doesn't recognize, still
-    raises :class:`OmmlConversionError` rather than guessing.
+    raises :class:`OmmlConversionError` rather than guessing. An ``m:nary``
+    that omits ``m:naryPr``/``m:chr`` altogether is read as the summation the
+    format documents as that element's default, not rejected.
     Constructs this converter does not reverse — matrices, piecewise/cases tables, and **MathFmt's own
     multi-line/aligned equation output** (also built from a native OMML matrix
     or ``m:eqArr``, despite not being a mathematical matrix) — raise
@@ -783,6 +785,17 @@ def _emit_limit(elem: etree._Element) -> str:
     )
 
 
+# ISO/IEC 29500's CT_NaryPr defines U+2211 N-ARY SUMMATION as the operator's
+# value when m:naryPr — or its m:chr child — is omitted entirely; m:naryPr is
+# itself minOccurs="0" in CT_Nary. That is the format's own documented default,
+# not this converter guessing, so an absent property is honored rather than
+# rejected as "the m:nary operator None". In practice this branch serves
+# third-party or hand-authored OMML: MathFmt's own writer and Office's
+# MML2OMML.XSL both always write m:chr explicitly (MML2OMML's CreateNaryProp
+# emits an unconditional <m:chr>), even for a plain summation.
+_DEFAULT_NARY_CHAR = "∑"
+
+
 def _emit_nary(elem: etree._Element) -> str:
     """Reconstruct ``m:nary`` as ``name(sub,sup)`` followed by its operand.
 
@@ -799,7 +812,12 @@ def _emit_nary(elem: etree._Element) -> str:
     """
     nary_pr = _find(elem, "naryPr")
     chr_el = _find(nary_pr, "chr") if nary_pr is not None else None
-    char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else None
+    # A present m:chr with no m:val is a different, narrower case: ISO/IEC
+    # 29500 treats that as the character being absent, not "use the default"
+    # (the default applies only when m:chr/m:naryPr is missing outright), so it
+    # falls through to the "unsupported operator" raise below rather than
+    # silently becoming a summation. This mirrors _emit_accent exactly.
+    char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else _DEFAULT_NARY_CHAR
     name = _NARY_OPERATOR_NAMES.get(char or "")
     if name is None:
         raise OmmlConversionError(f"omml_to_text does not support the m:nary operator {char!r}")

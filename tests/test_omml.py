@@ -769,6 +769,33 @@ def test_omml_to_text_reads_a_multi_run_nary_operand() -> None:
     assert omml_to_text(omath) == "sum(i=1,n)x+1"
 
 
+@pytest.mark.parametrize("with_nary_pr", [True, False])
+def test_omml_to_text_defaults_an_absent_nary_chr_to_sum(with_nary_pr: bool) -> None:
+    # ECMA-376 gives CT_NaryPr's m:chr a default of U+2211 (n-ary summation),
+    # and m:naryPr is itself optional in CT_Nary, so an m:nary that omits
+    # either is a legitimate Word shape meaning "sum" — not an error. This
+    # matches how an absent m:accPr/m:chr is handled for accents: an absent
+    # property means the format's documented default; a present but
+    # unrecognised value still raises.
+    omath = etree.Element(qname(M_NS, "oMath"))
+    _word_nary(omath, chr_val=None, with_nary_pr=with_nary_pr)
+
+    assert omml_to_text(omath) == "sum(i=1,n)x"
+
+
+def test_omml_to_text_rejects_a_valueless_nary_chr() -> None:
+    # A *present* m:chr carrying no m:val is the narrower case the default does
+    # not cover — it names no operator, so it raises rather than becoming a sum.
+    omath = etree.Element(qname(M_NS, "oMath"))
+    nary = _word_nary(omath, chr_val=None)
+    nary_pr = nary.find(qname(M_NS, "naryPr"))
+    assert nary_pr is not None
+    nary_pr.insert(0, etree.Element(qname(M_NS, "chr")))
+
+    with pytest.raises(OmmlConversionError, match="does not support the m:nary operator"):
+        omml_to_text(omath)
+
+
 def test_omml_to_text_nary_rejects_unrecognized_operator() -> None:
     omath = etree.Element(qname(M_NS, "oMath"))
     nary = etree.SubElement(omath, qname(M_NS, "nary"))
