@@ -281,8 +281,25 @@ def test_accent_produces_m_acc() -> None:
     assert acc is not None
     chr_el = acc.find(f"{{{M_NS}}}accPr/{{{M_NS}}}chr")
     assert chr_el is not None
-    assert chr_el.get(qname(M_NS, "val")) == "‾"
+    # U+0305 COMBINING OVERLINE — Word's mark, not MathML's spacing U+203E.
+    assert chr_el.get(qname(M_NS, "val")) == "̅"
     assert acc.find(f"{{{M_NS}}}e") is not None
+    assert "".join(acc.find(f"{{{M_NS}}}e").itertext()) == "x"
+
+
+@pytest.mark.parametrize(
+    ("source", "char"),
+    [
+        ("accent(x,bar)", "̅"),
+        ("accent(y,hat)", "̂"),
+        ("accent(F,vec)", "⃗"),
+        ("accent(q,dot)", "̇"),
+        ("accent(q,ddot)", "̈"),
+    ],
+)
+def test_accent_uses_word_combining_marks(source: str, char: str) -> None:
+    acc = omath_for(source).find(f".//{{{M_NS}}}acc")
+    assert acc.find(f"{{{M_NS}}}accPr/{{{M_NS}}}chr").get(qname(M_NS, "val")) == char
 
 
 def test_annotated_arrow_still_uses_lim_upp() -> None:
