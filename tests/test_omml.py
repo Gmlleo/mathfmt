@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 from lxml import etree
 
+from mathfmt.accents import ACCENT_NAMES, ACCENTS, OMML_ACCENT_CHARS
 from mathfmt.core import ACCENT_CHARS, M_NS, formula_to_mathml, qname
 from mathfmt.omml import (
-    _OMML_ACCENT_CHARS,
     XML_NS,
     OmmlConversionError,
     combine_equation_array,
@@ -117,15 +117,54 @@ def test_annotated_arrow_still_uses_lim_upp() -> None:
 
 
 def test_every_mathml_accent_has_an_omml_mark() -> None:
-    # A kind added to ACCENT_CHARS without an entry here would fail the whole
-    # apply command rather than being reported as one failed formula.
-    assert set(ACCENT_CHARS.values()) == set(_OMML_ACCENT_CHARS)
+    # A kind added to ACCENT_CHARS without an entry here would create a scan/apply
+    # asymmetry: scan_docx only calls formula_to_mathml, so the candidate is reported
+    # parse_status="ok" and gets approved, then silently drops out at apply time when
+    # mathml_to_omml_py hits the unmapped character.
+    assert set(ACCENT_CHARS.values()) == set(OMML_ACCENT_CHARS)
 
 
 def test_accent_converts_compound_base_expression() -> None:
     acc = omath_for("accent(a+b,bar)").find(f".//{{{M_NS}}}acc")
     e = acc.find(f"{{{M_NS}}}e")
     assert "".join(e.itertext()) == "a+b"
+
+
+def test_accent_table_is_unambiguous() -> None:
+    # Every kind needs its own MathML character and its own Word mark, or the
+    # reverse mapping in ACCENT_NAMES silently collapses two kinds into one.
+    names = [name for name, _, _ in ACCENTS]
+    spacing = [spacing for _, spacing, _ in ACCENTS]
+    combining = [combining for _, _, combining in ACCENTS]
+    assert len(set(names)) == len(names)
+    assert len(set(spacing)) == len(spacing)
+    assert len(set(combining)) == len(combining)
+    assert len(ACCENT_CHARS) == len(OMML_ACCENT_CHARS) == len(ACCENT_NAMES) == len(ACCENTS)
+
+
+def test_accent_rejects_unsupported_mathml_character() -> None:
+    # Reachable from the public API with foreign MathML, not only through the
+    # fixed ACCENT_CHARS values that formula_to_mathml itself ever emits.
+    mover = etree.Element("mover", accent="true")
+    etree.SubElement(mover, "mi").text = "x"
+    etree.SubElement(mover, "mo").text = "~"
+    math = etree.Element("math")
+    math.append(mover)
+
+    with pytest.raises(OmmlConversionError, match="unsupported MathML accent character"):
+        mathml_to_omml_py(math)
+
+
+@pytest.mark.parametrize("child_texts", [("x",), ()])
+def test_accent_rejects_malformed_child_count(child_texts: tuple[str, ...]) -> None:
+    mover = etree.Element("mover", accent="true")
+    for text in child_texts:
+        etree.SubElement(mover, "mi").text = text
+    math = etree.Element("math")
+    math.append(mover)
+
+    with pytest.raises(OmmlConversionError, match="requires a base and an accent character"):
+        mathml_to_omml_py(math)
 
 
 def test_delimited_group_produces_m_d() -> None:

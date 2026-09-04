@@ -14,6 +14,7 @@ from pathlib import Path
 from lxml import etree
 
 from ._version import __version__
+from .accents import ACCENT_CHARS
 from .aliases import AliasProfile, alias_profile_metadata, validate_review_alias_profile
 from .docxio import inspect_docx, parse_xml_part, write_docx
 from .omml import combine_equation_array, mathml_to_omml_py
@@ -70,7 +71,6 @@ MATH_CHARS = set(
     "()[]{}⟨⟩.,'′˙¨·×÷_ \t∫∑∏∂;|"
     "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω"
 )
-ACCENT_CHARS = {"bar": "‾", "vec": "→", "hat": "^", "dot": "˙", "ddot": "¨"}
 TRIM_PUNCT = " \t,，.。;；:："
 
 CHEMICAL_ELEMENTS = frozenset(

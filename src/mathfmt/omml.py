@@ -8,6 +8,8 @@ from collections.abc import Sequence
 
 from lxml import etree
 
+from .accents import OMML_ACCENT_CHARS
+
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 
@@ -39,11 +41,6 @@ MATHML_TAGS = {
 
 
 RELATION_SYMBOLS = ("=", "≤", "≥", "≠", "≈", "→", "⇒", "⇌", "<", ">")
-
-# MathML uses spacing accent glyphs (see core.ACCENT_CHARS); Word's native m:acc
-# expects combining marks instead. U+0302 (hat) also happens to be OMML's
-# implicit default when m:chr is omitted, but we always set it explicitly.
-_OMML_ACCENT_CHARS = {"‾": "̅", "^": "̂", "→": "⃗", "˙": "̇", "¨": "̈"}
 
 
 def mathml_to_omml_py(math_elem: etree._Element) -> etree._Element:
@@ -277,8 +274,12 @@ def _limit_upper(elem: etree._Element, parent: etree._Element) -> None:
 
 def _accent(elem: etree._Element, parent: etree._Element) -> None:
     children = list(elem)
+    if len(children) < 2:
+        raise OmmlConversionError(
+            f"accented mover requires a base and an accent character, got {len(children)} child(ren)"
+        )
     mathml_char = (children[1].text or "").strip()
-    char = _OMML_ACCENT_CHARS.get(mathml_char)
+    char = OMML_ACCENT_CHARS.get(mathml_char)
     if char is None:
         raise OmmlConversionError(f"unsupported MathML accent character {mathml_char!r}")
     acc = etree.SubElement(parent, qname(M_NS, "acc"))
