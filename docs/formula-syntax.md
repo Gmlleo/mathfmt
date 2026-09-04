@@ -77,7 +77,7 @@ Unicode subscript chars become plain ASCII:
 The tokenizer uses this regex (simplified):
 
 ```
-NUMBER  : \d+(?:[.,]\d+)?
+NUMBER  : \d+(?:\.\d+)?
 IDENT   : sqrt | lim | exp | sin | cos | tan | Delta | pi | inf
         | e[pv] | pPAIR | DERV\d+
         | [A-Za-z](?:\d+)? | [ΔπΓ∞]
@@ -91,6 +91,13 @@ SEMI    : ;
 
 Whitespace between tokens is ignored.
 
+A comma is always a separator — for sequences, function arguments, and
+matrix/vector entries — never a decimal point. Decimals use `.` only:
+`3.14` is one number, but `3,14` is the two-element sequence `3, 14`.
+This also means a matrix or vector literal must not put a decimal
+comma next to its entry separator: write `[1, 2, 3]`, not a form that
+would make a comma do double duty.
+
 ### Token examples
 
 | Input | Tokens |
@@ -99,6 +106,8 @@ Whitespace between tokens is ignored.
 | `sin(x)` | IDENT(sin) LPAREN(() IDENT(x) RPAREN()) |
 | `p1 = ep` | IDENT(p1) OP(=) IDENT(ep) |
 | `a, b, c` | IDENT(a) COMMA IDENT(b) COMMA IDENT(c) |
+| `3.14` | NUMBER(3.14) |
+| `3,14` | NUMBER(3) COMMA NUMBER(14) |
 
 ---
 

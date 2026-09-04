@@ -383,7 +383,7 @@ TOKEN_RE = re.compile(
     r"\s*(?:"
     r"(?P<MATRIX_OPEN>\[\[)|"
     r"(?P<MATRIX_CLOSE>\]\])|"
-    r"(?P<NUMBER>\d+(?:[\.,]\d+)?)|"
+    r"(?P<NUMBER>\d+(?:\.\d+)?)|"
     r"(?P<IF>if\b)|"
     r"(?P<IDENT>sqrt|lim|exp|sin|cos|tan|Delta|pi|inf|e[pv]|pPAIR|DERV\d+|[A-Za-z][A-Za-z0-9]*|[Α-Ωα-ω∞∫∑∏ℝℂℕℤℚℙℍℓ∇])|"
     r"(?P<OP><->|<=|>=|!=|<<|>>|~=|->|=>|\+/-|[+\-*/^=<>!±∓≠≤≥≈≅→⇒⇌·×÷_∈∉⊂⊆⊃⊇∪∩∧∨⊕⊗∝≡])|"

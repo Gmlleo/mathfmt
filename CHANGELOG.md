@@ -2,6 +2,19 @@
 
 All notable changes to MathFmt are documented here.
 
+## [1.3.0]
+
+### Changed
+- A comma is no longer accepted as a decimal separator in formula numbers: the
+  `NUMBER` token is now `\d+(?:\.\d+)?` (was `\d+(?:[.,]\d+)?`). A comma is
+  MathFmt's sequence/argument/matrix separator everywhere else, and the two
+  readings collided — the decimal reading always won, so `[[1,2],[3,4]]`
+  silently parsed as a 2x1 matrix of the "numbers" `1,2` and `3,4` instead of
+  a 2x2 integer matrix, and `[1,2,3]` silently lost an element and became the
+  2-item vector `1,2` / `3`. Input like `x = 3,14` (European decimal) is no
+  longer one number; it now parses as the sequence `3, 14`, which still
+  renders as `3,14`. Use `.` for decimals, e.g. `x = 3.14`.
+
 ## [1.2.0] - 2026-09-03
 
 ### Added

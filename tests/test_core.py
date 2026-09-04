@@ -407,7 +407,7 @@ def test_sqrt_still_produces_msqrt() -> None:
     assert "msqrt" in local_tags("sqrt(x)")
 
 
-@pytest.mark.parametrize("source", ["root(x)", "root(x,y,z)"])
+@pytest.mark.parametrize("source", ["root(x)", "root(x,2,3)", "root(x,y,z)"])
 def test_invalid_root_is_rejected(source: str) -> None:
     with pytest.raises(FormulaError):
         formula_to_mathml(source)
@@ -426,3 +426,43 @@ def test_root_preserves_a_compound_base() -> None:
     mroot = math.find(f".//{{{MML_NS}}}mroot")
     assert [etree.QName(child).localname for child in mroot] == ["mrow", "mi"]
     assert "".join(mroot[0].itertext()) == "a+b"
+
+
+def test_matrix_literal_produces_two_by_two_structure() -> None:
+    # Regression for Task 5b: a comma between two digit runs used to lex as a
+    # single decimal NUMBER, so [[1,2],[3,4]] silently became a 2x1 matrix of
+    # the "numbers" 1,2 and 3,4 instead of a 2x2 integer matrix.
+    math = formula_to_mathml("[[1,2],[3,4]]")
+    rows = math.findall(f".//{{{MML_NS}}}mtr")
+    assert len(rows) == 2
+    for row, expected in zip(rows, [["1", "2"], ["3", "4"]], strict=True):
+        cells = row.findall(f"{{{MML_NS}}}mtd")
+        assert [etree.QName(cell[0]).localname for cell in cells] == ["mn", "mn"]
+        assert [cell[0].text for cell in cells] == expected
+
+
+def test_vector_literal_has_three_elements() -> None:
+    # Regression for Task 5b: [1,2,3] used to lex as the 2-element vector
+    # ["1,2", "3"] because "1,2" merged into one decimal NUMBER.
+    math = formula_to_mathml("[1,2,3]")
+    fenced = math.find(f".//{{{MML_NS}}}mfenced")
+    assert fenced is not None
+    numbers = fenced.findall(f".//{{{MML_NS}}}mn")
+    assert [n.text for n in numbers] == ["1", "2", "3"]
+
+
+def test_decimal_point_still_parses_as_one_number() -> None:
+    math = formula_to_mathml("x = 3.14")
+    numbers = math.findall(f".//{{{MML_NS}}}mn")
+    assert [n.text for n in numbers] == ["3.14"]
+
+
+def test_decimal_comma_is_now_a_sequence_not_one_number() -> None:
+    # Deliberate behaviour change (Task 5b): a comma is always a separator,
+    # never a decimal point, so "3,14" no longer lexes as one NUMBER token --
+    # it is the two-element sequence 3, 14.
+    tokens = [token.kind for token in tokenize("3,14") if token.kind != "EOF"]
+    assert tokens == ["NUMBER", "COMMA", "NUMBER"]
+    math = formula_to_mathml("3,14")
+    numbers = math.findall(f".//{{{MML_NS}}}mn")
+    assert [n.text for n in numbers] == ["3", "14"]
