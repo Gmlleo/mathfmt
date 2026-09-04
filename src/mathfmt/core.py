@@ -857,10 +857,16 @@ class Parser:
                     # which always wrap their content in one "group" child.
                     # Treating group.children as a call's argument list here
                     # would silently drop every element after the first --
-                    # fall back to implicit multiplication instead, exactly
-                    # what parse_mul would have produced had this atom not
-                    # consumed the bracket. This also keeps the brackets
-                    # square instead of forcing them to "()".
+                    # fall back to implicit multiplication instead, i.e. treat
+                    # this identifier and the bracketed group as adjacent
+                    # factors. This is not necessarily what parse_mul would
+                    # have produced had this atom not consumed the bracket:
+                    # parse_power/parse_subsup sit above parse_atom, so a
+                    # postfix operator right after the bracket binds
+                    # differently here (e.g. "f [a,b]^2" puts the exponent on
+                    # the whole product, whereas "f y^2" puts it on "y"
+                    # alone). This also keeps the brackets square instead of
+                    # forcing them to "()".
                     return Node("binary", "implicit", (Node("identifier", name), group))
                 return Node("function", name, group.children)
             return Node("identifier", name)

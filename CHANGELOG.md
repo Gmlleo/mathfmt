@@ -35,6 +35,17 @@ All notable changes to MathFmt are documented here.
     release (`f [a,b]` already dropped `b`); the number tokenizer change made
     it reachable for numeric intervals too, which is the more common shape
     in textbooks.
+  - `bra(1,2)` and `braket(1,2)` swap behavior as a consequence: `bra(...)`
+    takes exactly 1 argument, so `bra(1,2)` — previously parsed as `bra` of
+    the single number "1,2" — now raises (`bra requires 1 argument`).
+    `braket(...)` takes exactly 2, so `braket(1,2)` — previously rejected for
+    the same reason — now converts.
+- `accent` and `root` are now reserved alias tokens (`RESERVED_ALIAS_TOKENS`):
+  an existing alias profile that defines either name is rejected at load
+  (`Alias token 'accent'/'root' is reserved by MathFmt core syntax`). Both
+  names are now documented constructs (`accent(x,bar)`, `root(x,3)`), and the
+  alias branch runs before construct dispatch, so an unreserved alias would
+  otherwise silently shadow the construct instead of failing loudly.
 
 ## [1.2.0] - 2026-09-03
 

@@ -48,6 +48,50 @@ def test_radical_produces_m_rad() -> None:
     deg_hide = rad_pr.find(qname(M_NS, "degHide"))
     assert deg_hide is not None
     assert deg_hide.get(qname(M_NS, "val")) == "1"
+    # A square root's m:deg must be present (Word writes it even when hidden)
+    # but empty — this is exactly what the "sqrt" branch of the nth-root
+    # reversal test below relies on to distinguish it from a visible degree.
+    deg = rad.find(qname(M_NS, "deg"))
+    assert deg is not None
+    assert len(deg) == 0
+
+
+def test_nth_root_produces_m_rad_with_visible_degree() -> None:
+    # root(x,3) must not fall through omml.py's unknown-MathML-tag flatten
+    # fallback (mroot wasn't in MATHML_TAGS): that fallback silently drops the
+    # radical and emits the base and degree as plain adjacent runs ("x3"),
+    # which also regresses discoverability — before root() existed, the
+    # unconverted call read literally as "root(x,3)" in Word, now it would
+    # silently read as "x times 3".
+    rad = omath_for("root(x,3)").find(".//m:rad", namespaces={"m": M_NS})
+    assert rad is not None
+    rad_pr = rad.find(qname(M_NS, "radPr"))
+    assert rad_pr is not None
+    deg_hide = rad_pr.find(qname(M_NS, "degHide"))
+    assert deg_hide is not None
+    assert deg_hide.get(qname(M_NS, "val")) == "0"
+    deg = rad.find(qname(M_NS, "deg"))
+    assert deg is not None
+    assert "".join(deg.itertext()) == "3"
+    e = rad.find(qname(M_NS, "e"))
+    assert e is not None
+    assert "".join(e.itertext()) == "x"
+    # m:deg must precede m:e — OMML's CT_Rad fixes that child order.
+    assert list(rad).index(deg) < list(rad).index(e)
+
+
+@pytest.mark.parametrize("child_texts", [("x",), ()])
+def test_root_rejects_malformed_child_count(child_texts: tuple[str, ...]) -> None:
+    # mathml_to_omml_py is public API and can be handed foreign MathML — a
+    # malformed mroot (missing its degree) must raise cleanly, not IndexError.
+    mroot = etree.Element("mroot")
+    for text in child_texts:
+        etree.SubElement(mroot, "mi").text = text
+    math = etree.Element("math")
+    math.append(mroot)
+
+    with pytest.raises(OmmlConversionError, match="requires a base and a degree"):
+        mathml_to_omml_py(math)
 
 
 def test_superscript_produces_m_sSup() -> None:
@@ -383,6 +427,9 @@ def reparsed_omath(source: str) -> etree._Element:
         "a/(b+c)",
         "(a+b)/(c-d)",
         "sqrt(x^2+1)",
+        "root(x,3)",
+        "root(a+b,n+1)",
+        "root(root(x,3),2)",
         "x^2",
         "p1",
         "T_i^j",
@@ -474,12 +521,14 @@ def test_omml_to_text_rejects_bare_partial_symbol() -> None:
 
 def test_omml_to_text_rejects_unknown_element() -> None:
     omath = etree.Element(qname(M_NS, "oMath"))
-    etree.SubElement(omath, qname(M_NS, "nary"))
-    with pytest.raises(OmmlConversionError, match="m:nary"):
+    etree.SubElement(omath, qname(M_NS, "bogus"))
+    with pytest.raises(OmmlConversionError, match="m:bogus"):
         omml_to_text(omath)
 
 
-def test_omml_to_text_rejects_nth_root() -> None:
+def test_omml_to_text_reconstructs_nth_root() -> None:
+    # Was "does not support nth-root radicals" — root(x,3) is now a native
+    # construct (Task 5), so this must reconstruct rather than raise.
     omath = etree.Element(qname(M_NS, "oMath"))
     rad = etree.SubElement(omath, qname(M_NS, "rad"))
     deg = etree.SubElement(rad, qname(M_NS, "deg"))
@@ -489,8 +538,7 @@ def test_omml_to_text_rejects_nth_root() -> None:
     e_run = etree.SubElement(e, qname(M_NS, "r"))
     etree.SubElement(e_run, qname(M_NS, "t")).text = "x"
 
-    with pytest.raises(OmmlConversionError, match="nth-root"):
-        omml_to_text(omath)
+    assert omml_to_text(omath) == "root(x,3)"
 
 
 def test_omml_to_text_rejects_unrecognized_lim_base() -> None:

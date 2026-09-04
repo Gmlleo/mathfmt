@@ -516,5 +516,3 @@ guessing at a wrong answer:
   specifically *not* covered by `omml_to_text` despite not being a
   mathematical matrix.
 - N-ary operators (`m:nary`) and other elements outside the list above
-- Nth-root radicals (MathFmt's own input grammar has no nth-root syntax, so this
-  can only occur on hand-authored OMML)

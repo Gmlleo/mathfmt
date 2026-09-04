@@ -27,6 +27,7 @@ MATHML_TAGS = {
     "mo",
     "mfrac",
     "msqrt",
+    "mroot",
     "msup",
     "msub",
     "msubsup",
@@ -157,6 +158,8 @@ def _convert(elem: etree._Element, parent: etree._Element) -> None:
         _fraction(elem, parent)
     elif tag == "msqrt":
         _radical(elem, parent)
+    elif tag == "mroot":
+        _radical_with_degree(elem, parent)
     elif tag == "msup":
         _script(elem, parent, "sSup", "sup")
     elif tag == "msub":
@@ -210,6 +213,26 @@ def _radical(elem: etree._Element, parent: etree._Element) -> None:
     e = etree.SubElement(rad, qname(M_NS, "e"))
     for child in elem:
         _convert(child, e)
+
+
+def _radical_with_degree(elem: etree._Element, parent: etree._Element) -> None:
+    """Build an n-th root ``m:rad`` for MathML ``mroot`` (base, index children).
+
+    Unlike :func:`_radical`, the degree is visible: ``degHide`` is ``0`` and
+    ``m:deg`` is filled in. ``m:deg`` must be created before ``m:e`` — OMML's
+    ``CT_Rad`` fixes that child order.
+    """
+    children = list(elem)
+    if len(children) < 2:
+        raise OmmlConversionError(f"mroot requires a base and a degree, got {len(children)} child(ren)")
+    rad = etree.SubElement(parent, qname(M_NS, "rad"))
+    rad_pr = etree.SubElement(rad, qname(M_NS, "radPr"))
+    deg_hide = etree.SubElement(rad_pr, qname(M_NS, "degHide"))
+    deg_hide.set(qname(M_NS, "val"), "0")
+    deg = etree.SubElement(rad, qname(M_NS, "deg"))
+    e = etree.SubElement(rad, qname(M_NS, "e"))
+    _convert(children[0], e)
+    _convert(children[1], deg)
 
 
 def _script(
@@ -330,7 +353,8 @@ def omml_to_text(omath_elem: etree._Element) -> str:
     linear formula syntax — the reverse of :func:`mathml_to_omml_py`.
 
     Supports the constructs MathFmt's own OMML output uses: text runs, fractions
-    (including derivative and partial-derivative fractions), radicals,
+    (including derivative and partial-derivative fractions), radicals (both
+    ``sqrt(...)`` and, via a visible ``m:deg``, the n-th root ``root(base,n)``),
     super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket,
     vectors), limits / annotated reaction arrows, and accents (``m:acc``,
     including a base of its own accent for a nested ``accent(accent(x,bar),vec)``).
@@ -444,10 +468,7 @@ def _emit(elem: etree._Element) -> str:
     if tag == "f":
         return _emit_fraction(elem)
     if tag == "rad":
-        deg = _find(elem, "deg")
-        if deg is not None and len(deg) > 0:
-            raise OmmlConversionError("omml_to_text does not support nth-root radicals")
-        return "sqrt(" + _emit_children(_require(elem, "e")) + ")"
+        return _emit_radical(elem)
     if tag == "sSup":
         return _emit_operand(_find(elem, "e")) + "^" + _emit_operand(_find(elem, "sup"))
     if tag == "sSub":
@@ -528,6 +549,22 @@ def _strip_partial_symbol(container: etree._Element | None) -> str | None:
     if etree.QName(first).localname != "r" or _run_text(first) != _PARTIAL_SYMBOL:
         return None
     return _join_emitted(list(container)[1:])
+
+
+def _emit_radical(elem: etree._Element) -> str:
+    """Reconstruct ``m:rad`` as ``sqrt(base)`` or, for a visible degree,
+    ``root(base,degree)``.
+
+    Word writes ``m:deg`` for a square root too (with ``degHide`` set), but
+    empty — that is what distinguishes an ordinary square root from an n-th
+    root here: an absent or empty ``m:deg`` means ``sqrt``, a non-empty one
+    means ``root``.
+    """
+    base_text = _emit_children(_require(elem, "e"))
+    deg = _find(elem, "deg")
+    if deg is not None and len(deg) > 0:
+        return f"root({base_text},{_emit_children(deg)})"
+    return f"sqrt({base_text})"
 
 
 def _emit_subscript(elem: etree._Element) -> str:
