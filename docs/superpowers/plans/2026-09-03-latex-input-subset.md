@@ -523,6 +523,29 @@ git commit -m "feat(core): add the root() construct and its MathML output"
 
 ---
 
+## Task 5b: Stop a comma from being read as a decimal point
+
+**Added during Task 5**, which discovered it: `root(x,2,3)` did not raise, because `TOKEN_RE`'s `NUMBER` branch is `\d+(?:[\.,]\d+)?` — a comma between two digit runs lexes as one number. The comma is also MathFmt's sequence, argument, and matrix separator, so the two readings collide and the decimal reading always wins.
+
+Verified consequences on the pre-fix tokenizer:
+
+| Input | Actual parse | Intended |
+|---|---|---|
+| `[[1,2],[3,4]]` | a 2×1 matrix of the decimals `1,2` and `3,4` | a 2×2 integer matrix |
+| `[1,2,3]` | a 2-element vector (`1,2` and `3`) | a 3-element vector |
+| `x = 3,14` | one number (European decimal) | unchanged by the fix, see below |
+| `p1,2` | identifier, comma, number — correct already | unchanged |
+
+`tests/test_omml.py:395` already covers `[1,2,3]` and passes, because it only asserts the conversion succeeds and the rendered text is `1,2,3` either way — the missing element is invisible.
+
+This blocks Task 11: `\begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}` is the canonical LaTeX matrix and expands to exactly the broken shape.
+
+**Fix:** `NUMBER` becomes `\d+(?:\.\d+)?`. A decimal comma then parses as a sequence — `x = 3,14` renders as `3,14` with a comma operator, visually near-identical to the single number it produced before, whereas the matrix error is structural. This changes documented syntax (`docs/formula-syntax.md` line 80 lists `[.,]`), so it needs a CHANGELOG `### Changed` entry alongside the reserved-alias-token one.
+
+Note that a space already disambiguates today (`[[1, 2],[3, 4]]` parses correctly), so the LaTeX expander does not need to emit spaces once this lands.
+
+---
+
 ## Task 6: n-th roots in OMML, both directions
 
 **Files:**
