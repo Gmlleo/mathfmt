@@ -228,6 +228,88 @@ def test_limit_produces_m_limLow() -> None:
     assert "limLow" in tags("lim(p->0)")
 
 
+def test_lim_output_unchanged_by_nary_bounds_support() -> None:
+    # munderover gaining its own dispatch (for sum/prod bounds) must not
+    # affect munder, which lim(...) uses via a completely separate branch.
+    omath = omath_for("lim(x->0)")
+    lim_low = omath.find(".//m:limLow", namespaces={"m": M_NS})
+    assert lim_low is not None
+    assert "".join(lim_low.find("./m:e", namespaces={"m": M_NS}).itertext()) == "lim"
+    assert "".join(lim_low.find("./m:lim", namespaces={"m": M_NS}).itertext()) == "x→0"
+    assert "nary" not in tags("lim(x->0)")
+
+
+@pytest.mark.parametrize(
+    ("source", "op_char", "sub_text", "sup_text"),
+    [
+        ("sum(i=1,n) i", "∑", "i=1", "n"),
+        ("sum(i=1,10) i", "∑", "i=1", "10"),
+        ("prod(k=1,m) k", "∏", "k=1", "m"),
+    ],
+)
+def test_nary_bounds_produce_m_nary_with_both_bounds(
+    source: str, op_char: str, sub_text: str, sup_text: str
+) -> None:
+    # Regression coverage for the pre-existing (shipped-in-v1.2) defect: before
+    # "munderover" was added to MATHML_TAGS, both bounds of a bounded sum/prod
+    # were silently flattened into plain adjacent text runs — e.g.
+    # "sum(i=1,n) i" produced OMML text reading "∑i=1ni" with no m:nary and no
+    # m:sub/m:sup at all. Asserting structure (not rendered text) is what would
+    # have caught it: the old flattened output still concatenates to readable
+    # text, which is exactly how this survived a release untested.
+    omath = omath_for(source)
+    assert "nary" in tags(source)
+    nary = omath.find(".//m:nary", namespaces={"m": M_NS})
+    assert nary is not None
+    nary_pr = nary.find(qname(M_NS, "naryPr"))
+    assert nary_pr is not None
+    chr_el = nary_pr.find(qname(M_NS, "chr"))
+    assert chr_el is not None
+    assert chr_el.get(qname(M_NS, "val")) == op_char
+    limLoc = nary_pr.find(qname(M_NS, "limLoc"))
+    assert limLoc is not None
+    assert limLoc.get(qname(M_NS, "val")) == "undOvr"
+    for hide_tag in ("subHide", "supHide"):
+        hide_el = nary_pr.find(qname(M_NS, hide_tag))
+        assert hide_el is not None
+        assert hide_el.get(qname(M_NS, "val")) == "0"
+    sub = nary.find(qname(M_NS, "sub"))
+    sup = nary.find(qname(M_NS, "sup"))
+    assert sub is not None
+    assert sup is not None
+    assert "".join(sub.itertext()) == sub_text
+    assert "".join(sup.itertext()) == sup_text
+    # sub must precede sup, both before (or as) e, per CT_Nary's fixed order.
+    order = list(nary)
+    assert order.index(sub) < order.index(sup)
+
+
+def test_munderover_rejects_malformed_child_count() -> None:
+    # mathml_to_omml_py is public API and can be handed foreign MathML — a
+    # malformed munderover (missing an over-bound) must raise cleanly, not
+    # IndexError.
+    munderover = etree.Element("munderover")
+    etree.SubElement(munderover, "mo").text = "∑"
+    etree.SubElement(munderover, "mrow")
+    math = etree.Element("math")
+    math.append(munderover)
+
+    with pytest.raises(OmmlConversionError, match="requires a base, an under bound, and an over bound"):
+        mathml_to_omml_py(math)
+
+
+def test_int_with_bounds_produces_m_sSubSup_with_both_bounds() -> None:
+    # int(0,1) f already worked before this task (msubsup, not munderover) —
+    # pin its OMML structure so a future change can't regress it unnoticed the
+    # same way munderover's bounds regressed silently.
+    omath = omath_for("int(0,1) f")
+    ssubsup = omath.find(".//m:sSubSup", namespaces={"m": M_NS})
+    assert ssubsup is not None
+    assert "".join(ssubsup.find("./m:e", namespaces={"m": M_NS}).itertext()) == "∫"
+    assert "".join(ssubsup.find("./m:sub", namespaces={"m": M_NS}).itertext()) == "0"
+    assert "".join(ssubsup.find("./m:sup", namespaces={"m": M_NS}).itertext()) == "1"
+
+
 def test_derivative_produces_m_f() -> None:
     assert "f" in tags("ds(t)/dt")
 
@@ -447,6 +529,10 @@ def reparsed_omath(source: str) -> etree._Element:
         "x => y",
         "2 +/- 3",
         "lim(x->0) sin(x)/x",
+        "sum(i=1,n) i",
+        "sum(i=1,10) i",
+        "prod(k=1,m) k",
+        "int(0,1) f",
         "H2O",
         "Ca(OH)2",
         "2H2 + O2 -> 2H2O",
@@ -539,6 +625,35 @@ def test_omml_to_text_reconstructs_nth_root() -> None:
     etree.SubElement(e_run, qname(M_NS, "t")).text = "x"
 
     assert omml_to_text(omath) == "root(x,3)"
+
+
+def test_omml_to_text_nary_requires_both_bounds() -> None:
+    # A m:nary with only one bound present is not a shape sum(...)/prod(...)
+    # can represent — must raise rather than guess a missing bound.
+    omath = omath_for("sum(i=1,n) i")
+    nary = omath.find(qname(M_NS, "nary"))
+    assert nary is not None
+    sup = nary.find(qname(M_NS, "sup"))
+    assert sup is not None
+    nary.remove(sup)
+
+    with pytest.raises(OmmlConversionError, match="both m:sub and m:sup"):
+        omml_to_text(omath)
+
+
+def test_omml_to_text_nary_rejects_unrecognized_operator() -> None:
+    omath = etree.Element(qname(M_NS, "oMath"))
+    nary = etree.SubElement(omath, qname(M_NS, "nary"))
+    nary_pr = etree.SubElement(nary, qname(M_NS, "naryPr"))
+    chr_el = etree.SubElement(nary_pr, qname(M_NS, "chr"))
+    chr_el.set(qname(M_NS, "val"), "⋃")
+    for tag in ("sub", "sup"):
+        container = etree.SubElement(nary, qname(M_NS, tag))
+        run = etree.SubElement(container, qname(M_NS, "r"))
+        etree.SubElement(run, qname(M_NS, "t")).text = "1"
+
+    with pytest.raises(OmmlConversionError, match="does not support the m:nary operator"):
+        omml_to_text(omath)
 
 
 def test_omml_to_text_rejects_unrecognized_lim_base() -> None:

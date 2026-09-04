@@ -46,6 +46,15 @@ All notable changes to MathFmt are documented here.
   names are now documented constructs (`accent(x,bar)`, `root(x,3)`), and the
   alias branch runs before construct dispatch, so an unreserved alias would
   otherwise silently shadow the construct instead of failing loudly.
+- `sum(i=1,n) i` / `prod(k=1,m) k` — a bounded n-ary operator — now converts
+  with both bounds correctly attached as a native OMML big-operator (`m:nary`
+  with `m:sub`/`m:sup`), and `omml_to_text` reverses that shape back to
+  `sum(...)`/`prod(...)`. Previously the MathML `munderover` carrying the
+  bounds fell through `mathml_to_omml_py`'s unknown-tag fallback and was
+  flattened: both bounds were silently dropped into plain adjacent text runs
+  (e.g. `sum(i=1,n) i` converted as if it read `∑i=1ni`, with no subscript or
+  superscript at all). `int(0,1) f` was and remains unaffected — integral
+  bounds already used `m:sSubSup`, not `m:nary`.
 
 ## [1.2.0] - 2026-09-03
 

@@ -492,10 +492,12 @@ reconstructs with an explicit `_` (`p_1` rather than the bare `p1` shorthand),
 Supported: numbers, identifiers, operators and relations, fractions (including
 derivative and partial-derivative fractions, via `d`/`∂` detection), radicals,
 super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket
-delimiters, vectors), `lim(...)` / annotated reaction arrows (`=>[heat]`), and
-chemistry formulas and reactions (`H2O`, `(OH)2`, `2H2 + O2 -> 2H2O`) — these
-reconstruct in their original bare form (no `_`) so they re-parse through
-MathFmt's dedicated chemistry grammar rather than as a generic subscript.
+delimiters, vectors), `lim(...)` / annotated reaction arrows (`=>[heat]`),
+bounded n-ary big operators (`m:nary` with both bounds present, e.g.
+`sum(i=1,n) i` / `prod(k=1,m) k`), and chemistry formulas and reactions
+(`H2O`, `(OH)2`, `2H2 + O2 -> 2H2O`) — these reconstruct in their original
+bare form (no `_`) so they re-parse through MathFmt's dedicated chemistry
+grammar rather than as a generic subscript.
 
 Chemistry detection is a heuristic, not a guarantee: it looks for the
 upright/plain OMML run styling MathFmt's own chemistry grammar marks element
@@ -515,4 +517,6 @@ guessing at a wrong answer:
   support is otherwise a separately documented, commonly-used feature; it is
   specifically *not* covered by `omml_to_text` despite not being a
   mathematical matrix.
-- N-ary operators (`m:nary`) and other elements outside the list above
+- An `m:nary` missing one of its two bounds (`m:sub`/`m:sup`), or naming an
+  operator character other than `∑`, `∏`, or `∫` — and other elements outside
+  the list above

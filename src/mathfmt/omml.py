@@ -34,6 +34,7 @@ MATHML_TAGS = {
     "mfenced",
     "munder",
     "mover",
+    "munderover",
     "mrow",
     "mtable",
     "mtr",
@@ -175,6 +176,8 @@ def _convert(elem: etree._Element, parent: etree._Element) -> None:
             _accent(elem, parent)
         else:
             _limit_upper(elem, parent)
+    elif tag == "munderover":
+        _nary(elem, parent)
     elif tag == "mtable":
         _matrix(elem, parent)
     elif tag == "mrow":
@@ -295,6 +298,50 @@ def _limit_upper(elem: etree._Element, parent: etree._Element) -> None:
         _convert(elem[1], lim)
 
 
+def _nary(elem: etree._Element, parent: etree._Element) -> None:
+    """Build a native ``m:nary`` (big-operator with both bounds) from a
+    MathML ``munderover`` — this is the only shape ``_nary_mathml`` (core.py)
+    ever wraps in ``munderover``, always as ``(operator, under-bound,
+    over-bound)``, for a bounded ``sum``/``prod``.
+
+    This is what Word itself writes for ``∑_{i=1}^{n}`` (``m:nary`` with
+    ``m:naryPr``, ``m:sub``, ``m:sup``, ``m:e``) and gives correct
+    big-operator layout, unlike ``m:limLow``/``m:limUpp`` nested together
+    (which is Word's shape for a *stacked* under/over annotation, not a
+    big-operator template, and has no room for the operator's own glyph
+    alongside its bounds).
+
+    ``m:e`` is left present but empty: the operand (e.g. the "i" in
+    "sum(i=1,n) i") is a MathML sibling of this ``munderover``, not a child of
+    it (mirroring how the pre-existing ``int(0,1) f`` path already leaves the
+    integrand as a sibling of the ``sSubSup`` it builds, rather than trying to
+    reach across siblings here to nest it inside ``m:e``). This is the same
+    "structurally present, visually empty" shape ``_radical``'s own ``m:deg``
+    already uses for a square root, and keeps this conversion local to one
+    element instead of a fragile lookahead into arbitrary MathML.
+    """
+    children = list(elem)
+    if len(children) < 3:
+        raise OmmlConversionError(
+            f"munderover requires a base, an under bound, and an over bound, got {len(children)} child(ren)"
+        )
+    nary = etree.SubElement(parent, qname(M_NS, "nary"))
+    nary_pr = etree.SubElement(nary, qname(M_NS, "naryPr"))
+    chr_el = etree.SubElement(nary_pr, qname(M_NS, "chr"))
+    chr_el.set(qname(M_NS, "val"), children[0].text or "")
+    lim_loc = etree.SubElement(nary_pr, qname(M_NS, "limLoc"))
+    lim_loc.set(qname(M_NS, "val"), "undOvr")
+    sub_hide = etree.SubElement(nary_pr, qname(M_NS, "subHide"))
+    sub_hide.set(qname(M_NS, "val"), "0")
+    sup_hide = etree.SubElement(nary_pr, qname(M_NS, "supHide"))
+    sup_hide.set(qname(M_NS, "val"), "0")
+    sub = etree.SubElement(nary, qname(M_NS, "sub"))
+    _convert(children[1], sub)
+    sup = etree.SubElement(nary, qname(M_NS, "sup"))
+    _convert(children[2], sup)
+    etree.SubElement(nary, qname(M_NS, "e"))
+
+
 def _accent(elem: etree._Element, parent: etree._Element) -> None:
     children = list(elem)
     if len(children) < 2:
@@ -356,13 +403,17 @@ def omml_to_text(omath_elem: etree._Element) -> str:
     (including derivative and partial-derivative fractions), radicals (both
     ``sqrt(...)`` and, via a visible ``m:deg``, the n-th root ``root(base,n)``),
     super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket,
-    vectors), limits / annotated reaction arrows, and accents (``m:acc``,
-    including a base of its own accent for a nested ``accent(accent(x,bar),vec)``).
-    Constructs this converter does not reverse — matrices, piecewise/cases tables, **MathFmt's own
+    vectors), limits / annotated reaction arrows, accents (``m:acc``,
+    including a base of its own accent for a nested ``accent(accent(x,bar),vec)``),
+    and bounded n-ary big operators (``m:nary``, e.g. ``sum(i=1,n) i`` /
+    ``prod(k=1,m) k``) — an ``m:nary`` missing one of its two bounds, or
+    naming an operator character this converter doesn't recognize, still
+    raises :class:`OmmlConversionError` rather than guessing.
+    Constructs this converter does not reverse — matrices, piecewise/cases tables, and **MathFmt's own
     multi-line/aligned equation output** (also built from a native OMML matrix
-    or ``m:eqArr``, despite not being a mathematical matrix), and n-ary
-    operators — raise :class:`OmmlConversionError` naming the unsupported
-    element instead of guessing at a wrong answer.
+    or ``m:eqArr``, despite not being a mathematical matrix) — raise
+    :class:`OmmlConversionError` naming the unsupported element instead of
+    guessing at a wrong answer.
 
     The result re-parses (via :func:`formula_to_mathml <mathfmt.core.formula_to_mathml>`)
     to an equivalent formula, not necessarily byte-identical input text — for
@@ -488,6 +539,8 @@ def _emit(elem: etree._Element) -> str:
         return _emit_limit(elem)
     if tag == "acc":
         return _emit_accent(elem)
+    if tag == "nary":
+        return _emit_nary(elem)
     raise OmmlConversionError(f"omml_to_text does not support m:{tag} elements")
 
 
@@ -652,6 +705,44 @@ def _emit_limit(elem: etree._Element) -> str:
         f"omml_to_text only supports m:limLow/m:limUpp for 'lim(...)' or an annotated "
         f"reaction arrow, got base {base!r}"
     )
+
+
+# Reverse of the char values `_nary` (the forward direction, above) writes
+# into m:naryPr/m:chr for MathFmt's own output. Included for completeness:
+# ∫ never reaches this path from MathFmt's own writer (int(...) always uses
+# m:sSubSup — see _nary_mathml in core.py), but a hand-authored or
+# Word-authored m:nary using ∫ is a real, common shape, and this mapping
+# reconstructs it the same way.
+_NARY_OPERATOR_NAMES = {"∑": "sum", "∏": "prod", "∫": "int"}
+
+
+def _emit_nary(elem: etree._Element) -> str:
+    """Reconstruct ``m:nary`` as ``name(sub,sup)`` followed by its operand.
+
+    Requires both ``m:sub`` and ``m:sup`` to be present and non-empty — a
+    single-bound or bound-less ``m:nary`` has no ``sum(a,b)``-shaped linear
+    form, so it raises rather than guessing at a missing bound.
+
+    The operand can be reached two ways, and both are handled: MathFmt's own
+    forward output leaves ``m:e`` empty and puts the operand in a following
+    OMML sibling (picked up automatically once this function returns, by the
+    normal sibling-concatenation loop in ``_join_emitted``); real Word output
+    nests the operand inside ``m:e`` itself, which is emitted directly here.
+    """
+    nary_pr = _find(elem, "naryPr")
+    chr_el = _find(nary_pr, "chr") if nary_pr is not None else None
+    char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else None
+    name = _NARY_OPERATOR_NAMES.get(char or "")
+    if name is None:
+        raise OmmlConversionError(f"omml_to_text does not support the m:nary operator {char!r}")
+    sub, sup = _find(elem, "sub"), _find(elem, "sup")
+    if sub is None or len(sub) == 0 or sup is None or len(sup) == 0:
+        raise OmmlConversionError(
+            f"omml_to_text requires both m:sub and m:sup to reconstruct m:nary as {name}(...)"
+        )
+    e = _find(elem, "e")
+    operand = _emit_children(e) if e is not None else ""
+    return f"{name}({_emit_children(sub)},{_emit_children(sup)})" + operand
 
 
 # ISO/IEC 29500's CT_AccPr defines U+0302 COMBINING CIRCUMFLEX ACCENT (hat) as
