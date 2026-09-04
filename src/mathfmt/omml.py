@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 from lxml import etree
 
-from .accents import ACCENT_NAMES, OMML_ACCENT_CHARS
+from .accents import ACCENT_CHARS, ACCENT_NAMES, OMML_ACCENT_CHARS
 
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
@@ -617,15 +617,24 @@ def _emit_limit(elem: etree._Element) -> str:
     )
 
 
-# OMML itself defines this as the implicit accent when m:accPr has no m:chr —
-# U+0302 COMBINING CIRCUMFLEX ACCENT (hat). A real Word document may take that
-# shortcut, so a missing m:chr is that documented default, not a malformed
-# document; only an m:chr value outside ACCENT_NAMES is an error.
-_DEFAULT_ACCENT_CHAR = "̂"
+# ISO/IEC 29500's CT_AccPr defines U+0302 COMBINING CIRCUMFLEX ACCENT (hat) as
+# the accent's value when m:accPr — or its m:chr child — is omitted entirely;
+# m:accPr is itself minOccurs="0" in CT_Acc. That is the format's own
+# documented default, not this converter guessing, so an absent property is
+# honored rather than rejected. In practice this branch serves third-party or
+# hand-authored OMML: MathFmt's own writer and Office's MML2OMML.XSL both
+# always write m:chr explicitly, even for hat.
+_DEFAULT_ACCENT_CHAR = OMML_ACCENT_CHARS[ACCENT_CHARS["hat"]]
 
 
 def _emit_accent(elem: etree._Element) -> str:
-    chr_el = _find(_require(elem, "accPr"), "chr")
+    acc_pr = _find(elem, "accPr")
+    chr_el = _find(acc_pr, "chr") if acc_pr is not None else None
+    # A present m:chr with no m:val is a different, narrower case: ISO/IEC
+    # 29500 treats that as the character being absent, not "use the default"
+    # (the default applies only when m:chr/m:accPr is missing outright), so
+    # it falls through to the same "unsupported character" raise below rather
+    # than silently becoming hat.
     char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else _DEFAULT_ACCENT_CHAR
     name = ACCENT_NAMES.get(char or "")
     if name is None:

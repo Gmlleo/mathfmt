@@ -580,11 +580,57 @@ def test_accent_round_trips_when_nested() -> None:
 
 
 def test_accent_missing_chr_element_defaults_to_hat() -> None:
-    # OMML's own spec: m:accPr without m:chr means the implicit default,
-    # U+0302 COMBINING CIRCUMFLEX ACCENT (hat) — so a real Word document
-    # containing a hat accent may legitimately have no m:chr element at all.
-    # omml_to_text must honor that default rather than raising.
+    # ISO/IEC 29500's CT_AccPr: omitting m:chr means the implicit default,
+    # U+0302 COMBINING CIRCUMFLEX ACCENT (hat) — a spec-defined default, not
+    # something this converter chooses to guess. Matters for third-party or
+    # hand-authored OMML: MathFmt's own writer and Office's MML2OMML.XSL both
+    # always write m:chr explicitly, even for hat.
     omath = omath_for("accent(y,hat)")
     acc_pr = omath.find(f".//{{{M_NS}}}acc/{{{M_NS}}}accPr")
     acc_pr.remove(acc_pr.find(f"{{{M_NS}}}chr"))
     assert omml_to_text(omath) == "accent(y,hat)"
+
+
+def test_accent_missing_accPr_element_defaults_to_hat() -> None:
+    # m:accPr is minOccurs="0" in CT_Acc, so a bare <m:acc><m:e>x</m:e></m:acc>
+    # is schema-valid, and the same ISO/IEC 29500 default (U+0302, hat) applies
+    # whether m:accPr itself or only its m:chr child is omitted — the rule is
+    # "an absent property means the documented default", applied consistently.
+    omath = etree.Element(qname(M_NS, "oMath"))
+    acc = etree.SubElement(omath, qname(M_NS, "acc"))
+    e = etree.SubElement(acc, qname(M_NS, "e"))
+    run = etree.SubElement(e, qname(M_NS, "r"))
+    etree.SubElement(run, qname(M_NS, "t")).text = "x"
+
+    assert omml_to_text(omath) == "accent(x,hat)"
+
+
+def test_omml_to_text_rejects_accent_with_unrecognized_chr_value() -> None:
+    omath = etree.Element(qname(M_NS, "oMath"))
+    acc = etree.SubElement(omath, qname(M_NS, "acc"))
+    acc_pr = etree.SubElement(acc, qname(M_NS, "accPr"))
+    chr_el = etree.SubElement(acc_pr, qname(M_NS, "chr"))
+    chr_el.set(qname(M_NS, "val"), "~")
+    e = etree.SubElement(acc, qname(M_NS, "e"))
+    run = etree.SubElement(e, qname(M_NS, "r"))
+    etree.SubElement(run, qname(M_NS, "t")).text = "x"
+
+    with pytest.raises(OmmlConversionError, match="accent character '~'"):
+        omml_to_text(omath)
+
+
+def test_omml_to_text_rejects_accent_chr_with_no_val() -> None:
+    # ISO/IEC 29500: m:chr present but without m:val means the character
+    # itself is absent, a narrower case than m:chr/m:accPr being missing
+    # outright — the spec-defined hat default applies only to the latter, so
+    # this must not be silently treated as hat either.
+    omath = etree.Element(qname(M_NS, "oMath"))
+    acc = etree.SubElement(omath, qname(M_NS, "acc"))
+    acc_pr = etree.SubElement(acc, qname(M_NS, "accPr"))
+    etree.SubElement(acc_pr, qname(M_NS, "chr"))  # no m:val
+    e = etree.SubElement(acc, qname(M_NS, "e"))
+    run = etree.SubElement(e, qname(M_NS, "r"))
+    etree.SubElement(run, qname(M_NS, "t")).text = "x"
+
+    with pytest.raises(OmmlConversionError, match="accent character None"):
+        omml_to_text(omath)
