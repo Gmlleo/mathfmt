@@ -1690,6 +1690,17 @@ git commit -m "docs: document the LaTeX input subset for v1.3"
 
 ---
 
+## Carried cleanups (from Task 4's code review — fold into any later task touching these files)
+
+Approved without must-fixes; none of these block. In the reviewer's priority order:
+
+1. **`tests/test_omml.py`** — `test_accent_round_trips_through_omml_to_text` duplicates `test_every_accent_kind_survives_the_full_round_trip` exactly (same five kinds, only the base letters differ). Delete the former and parametrize the survivor over the table — `@pytest.mark.parametrize("kind", list(ACCENT_CHARS))` — to keep the auto-extending property while regaining per-case failure names.
+2. **`accents.py`** — move `_DEFAULT_ACCENT_CHAR` there as `DEFAULT_OMML_ACCENT = OMML_ACCENT_CHARS[ACCENT_CHARS["hat"]]`, under the comment that already states the spec fact, and import it into `omml.py`. The derivation currently sits in `omml.py`, where the two-step `name → spacing → combining` chain crosses key spaces the module names ambiguously, and states the spec fact a second time. A rename of the `hat` row would also fail at import time — acceptable three lines from the table, worse in `omml.py`.
+3. **`omml.py`** — give the "present `m:chr` with no `m:val`" case its own branch and message. It currently reaches the unrecognised-value raise only because `char` becomes `None` and misses the dict, producing `accent character None`, which no document author can act on, and forcing the test to match that literal string. A distinct message (`m:chr has no m:val`) would let the five-line explanatory comment shrink to one sentence.
+4. **`tests/test_omml.py`** — the round-trip test's comment says "Iterating ACCENTS directly" while the code iterates `ACCENT_CHARS` imported from `mathfmt.core`; the file already imports `ACCENTS` from `mathfmt.accents`. Read the table from `accents`, and trim the twelve-line comment to the residual risk it actually covers.
+5. **`omml.py:335-337`** — `omml_to_text`'s docstring gained a garbled clause ("including a base of its own accent for a nested…"; meaning "an accent whose base is itself an accent") and a 100-char line in a paragraph otherwise wrapped at 70-83. This is public-API documentation.
+6. **Unpinned behaviour worth a test:** a third-party bare `<m:acc><m:e>x</m:e></m:acc>` reverses to `accent(x,hat)` and re-emits with an explicit `m:chr` U+0302 — a spec-correct normalization on a second pass through MathFmt. Nothing asserts the second pass.
+
 ## Self-review
 
 **Spec coverage:**
