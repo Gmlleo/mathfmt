@@ -399,11 +399,13 @@ Expected: FAIL with `OmmlConversionError: omml_to_text does not support m:acc el
 
 Add the reverse table next to the other module constants in `src/mathfmt/omml.py`:
 
+**Do not write a new table.** Task 3's follow-up collapsed all three accent representations into one source of truth, `src/mathfmt/accents.py`, whose `ACCENTS` rows are `(kind name, MathML spacing character, Word combining mark)`. The reverse mapping already exists there:
+
 ```python
-_ACCENT_NAMES = {"̅": "bar", "⃗": "vec", "̂": "hat", "̇": "dot", "̈": "ddot"}
+ACCENT_NAMES = {combining: name for name, _, combining in ACCENTS}
 ```
 
-Note these are the **combining** marks written into `m:accPr/m:chr` by Task 3, not the spacing characters MathML uses. Keying this table off `ACCENT_CHARS`'s spacing forms would make every round trip fail.
+Import it — `from .accents import ACCENT_NAMES` — and key the lookup off the **combining** mark written into `m:accPr/m:chr`, which is what an `m:acc` element actually carries. A hand-written table here would reintroduce the drift that refactor removed, and `test_accent_table_is_unambiguous` would not catch it.
 
 In `_emit`, add a branch before the final `raise`:
 
