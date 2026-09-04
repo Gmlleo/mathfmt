@@ -413,7 +413,7 @@ In `_emit`, add a branch before the final `raise`:
     if tag == "acc":
         chr_el = elem.find(qname(M_NS, "accPr") + "/" + qname(M_NS, "chr"))
         char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else "‾"
-        name = _ACCENT_NAMES.get(char or "")
+        name = ACCENT_NAMES.get(char or "")
         if name is None:
             raise OmmlConversionError(f"omml_to_text does not support the accent character {char!r}")
         return f"accent({_emit_children(_require(elem, 'e'))},{name})"
@@ -1712,7 +1712,7 @@ git commit -m "docs: document the LaTeX input subset for v1.3"
 | §8 documentation | 15 |
 | §5 GUI preview | **out of scope — separate plan** |
 
-**Naming consistency:** `expand_latex` and `contains_latex_macro` are used with those names in Tasks 8–13. `_read_group(source, index, opener, closer)` is defined in Task 9 and reused by `_expand_scripts` in Task 10. AST node kinds are `accent`, `root`, and `text` throughout Tasks 2, 5, 7, and their MathML/OMML counterparts. `ACCENT_CHARS` (core) maps name → character; `_ACCENT_NAMES` (omml) is its inverse; `ACCENT_MACROS` (latex) maps macro name → accent name.
+**Naming consistency:** `expand_latex` and `contains_latex_macro` are used with those names in Tasks 8–13. `_read_group(source, index, opener, closer)` is defined in Task 9 and reused by `_expand_scripts` in Task 10. AST node kinds are `accent`, `root`, and `text` throughout Tasks 2, 5, 7, and their MathML/OMML counterparts. Accent naming, after Task 3's follow-up unified the tables: `src/mathfmt/accents.py` holds `ACCENTS`, a tuple of `(kind name, MathML spacing character, Word combining mark)` rows, and derives all three mappings from it — `ACCENT_CHARS` (name → spacing, imported by `core`), `OMML_ACCENT_CHARS` (spacing → combining, imported by `omml`), and `ACCENT_NAMES` (combining → name, for Task 4's reverse conversion). `ACCENT_MACROS` (latex, Task 9) maps LaTeX macro name → accent name. Never write a fourth literal table; derive from `ACCENTS`.
 
 **Placeholder scan:** The first draft of Tasks 13 and 14 told the engineer to `grep` for the delimiter-stripping code and to copy `doc06`'s structure. Both were placeholders under this skill's rules and have been replaced with the actual code, after checking three things in the source:
 
