@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 from lxml import etree
 
-from .accents import OMML_ACCENT_CHARS
+from .accents import ACCENT_NAMES, OMML_ACCENT_CHARS
 
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
@@ -332,8 +332,9 @@ def omml_to_text(omath_elem: etree._Element) -> str:
     Supports the constructs MathFmt's own OMML output uses: text runs, fractions
     (including derivative and partial-derivative fractions), radicals,
     super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket,
-    vectors), and limits / annotated reaction arrows. Constructs this converter
-    does not reverse — matrices, piecewise/cases tables, **MathFmt's own
+    vectors), limits / annotated reaction arrows, and accents (``m:acc``,
+    including a base of its own accent for a nested ``accent(accent(x,bar),vec)``).
+    Constructs this converter does not reverse — matrices, piecewise/cases tables, **MathFmt's own
     multi-line/aligned equation output** (also built from a native OMML matrix
     or ``m:eqArr``, despite not being a mathematical matrix), and n-ary
     operators — raise :class:`OmmlConversionError` naming the unsupported
@@ -464,6 +465,8 @@ def _emit(elem: etree._Element) -> str:
         return beg + _emit_children(_require(elem, "e")) + end
     if tag in {"limLow", "limUpp"}:
         return _emit_limit(elem)
+    if tag == "acc":
+        return _emit_accent(elem)
     raise OmmlConversionError(f"omml_to_text does not support m:{tag} elements")
 
 
@@ -612,6 +615,22 @@ def _emit_limit(elem: etree._Element) -> str:
         f"omml_to_text only supports m:limLow/m:limUpp for 'lim(...)' or an annotated "
         f"reaction arrow, got base {base!r}"
     )
+
+
+# OMML itself defines this as the implicit accent when m:accPr has no m:chr —
+# U+0302 COMBINING CIRCUMFLEX ACCENT (hat). A real Word document may take that
+# shortcut, so a missing m:chr is that documented default, not a malformed
+# document; only an m:chr value outside ACCENT_NAMES is an error.
+_DEFAULT_ACCENT_CHAR = "̂"
+
+
+def _emit_accent(elem: etree._Element) -> str:
+    chr_el = _find(_require(elem, "accPr"), "chr")
+    char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else _DEFAULT_ACCENT_CHAR
+    name = ACCENT_NAMES.get(char or "")
+    if name is None:
+        raise OmmlConversionError(f"omml_to_text does not support the accent character {char!r}")
+    return f"accent({_emit_children(_require(elem, 'e'))},{name})"
 
 
 def _reverse_operators(text: str) -> str:

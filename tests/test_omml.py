@@ -116,12 +116,21 @@ def test_annotated_arrow_still_uses_lim_upp() -> None:
     assert "limUpp" in tags("CaCO3 =>[heat] CaO + CO2")
 
 
-def test_every_mathml_accent_has_an_omml_mark() -> None:
-    # A kind added to ACCENT_CHARS without an entry here would create a scan/apply
-    # asymmetry: scan_docx only calls formula_to_mathml, so the candidate is reported
-    # parse_status="ok" and gets approved, then silently drops out at apply time when
-    # mathml_to_omml_py hits the unmapped character.
-    assert set(ACCENT_CHARS.values()) == set(OMML_ACCENT_CHARS)
+def test_every_accent_kind_survives_the_full_round_trip() -> None:
+    # ACCENT_CHARS, OMML_ACCENT_CHARS, and ACCENT_NAMES all derive from the
+    # single ACCENTS tuple now, so they cannot drift apart from each other —
+    # test_accent_table_is_unambiguous already covers that. What can still
+    # regress silently is the pipeline built on top of the table: scan_docx
+    # calls formula_to_mathml only, so a formula is reported parse_status="ok"
+    # and approved for apply on the strength of that call alone; if
+    # mathml_to_omml_py or omml_to_text then failed to handle the character
+    # formula_to_mathml just emitted, the candidate would fail at apply time
+    # (recorded in `skipped` as status="failed") or refuse to reverse, after
+    # scan already told the user it was fine. Iterating ACCENTS directly means
+    # a kind added to the table is exercised here automatically.
+    for kind in ACCENT_CHARS:
+        source = f"accent(x,{kind})"
+        assert omml_to_text(omath_for(source)) == source
 
 
 def test_accent_converts_compound_base_expression() -> None:
@@ -553,3 +562,29 @@ def test_omml_to_text_plain_styled_non_digit_subscript_still_uses_underscore() -
     etree.SubElement(sub_run, qname(M_NS, "t")).text = "max"
 
     assert omml_to_text(omath) == "x_max"
+
+
+@pytest.mark.parametrize(
+    "source", ["accent(x,bar)", "accent(F,vec)", "accent(y,hat)", "accent(q,dot)", "accent(q,ddot)"]
+)
+def test_accent_round_trips_through_omml_to_text(source: str) -> None:
+    assert omml_to_text(omath_for(source)) == source
+
+
+def test_accent_round_trips_with_a_compound_base() -> None:
+    assert omml_to_text(omath_for("accent(a+b,bar)")) == "accent(a+b,bar)"
+
+
+def test_accent_round_trips_when_nested() -> None:
+    assert omml_to_text(omath_for("accent(accent(x,bar),vec)")) == "accent(accent(x,bar),vec)"
+
+
+def test_accent_missing_chr_element_defaults_to_hat() -> None:
+    # OMML's own spec: m:accPr without m:chr means the implicit default,
+    # U+0302 COMBINING CIRCUMFLEX ACCENT (hat) — so a real Word document
+    # containing a hat accent may legitimately have no m:chr element at all.
+    # omml_to_text must honor that default rather than raising.
+    omath = omath_for("accent(y,hat)")
+    acc_pr = omath.find(f".//{{{M_NS}}}acc/{{{M_NS}}}accPr")
+    acc_pr.remove(acc_pr.find(f"{{{M_NS}}}chr"))
+    assert omml_to_text(omath) == "accent(y,hat)"

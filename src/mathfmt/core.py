@@ -365,7 +365,7 @@ def _suggest_fix(expected: str | None) -> str | None:
     if expected == "]] or ,":
         return "Separate matrix entries with ',' and rows with ';', closing the matrix with ']]'."
     if expected == "accent kind":
-        return "An accent must be one of: bar, vec, hat, dot, ddot — e.g. accent(x,bar)."
+        return f"An accent must be one of: {', '.join(ACCENT_CHARS)} — e.g. accent(x,bar)."
     if expected == "number, identifier, function, matrix, or grouped expression":
         return "An operand is missing here — check for a stray operator or an empty group."
     if expected == "number, identifier, operator, or grouping symbol":

@@ -4,6 +4,7 @@ import pytest
 from lxml import etree
 
 from mathfmt.core import (
+    ACCENT_CHARS,
     M_NS,
     MML_NS,
     NS,
@@ -355,7 +356,9 @@ def test_invalid_accent_is_rejected(source: str) -> None:
 def test_accent_error_carries_a_hint() -> None:
     with pytest.raises(FormulaError) as excinfo:
         formula_to_mathml("accent(x,tilde)")
-    assert excinfo.value.to_dict()["hint"]
+    hint = excinfo.value.to_dict()["hint"]
+    for kind in ACCENT_CHARS:
+        assert kind in hint
 
 
 def test_accent_kind_is_not_shadowed_by_a_user_alias() -> None:
