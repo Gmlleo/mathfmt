@@ -298,6 +298,79 @@ def test_munderover_rejects_malformed_child_count() -> None:
         mathml_to_omml_py(math)
 
 
+NS = {"m": M_NS}
+
+
+def test_nary_operand_is_nested_inside_m_e() -> None:
+    # Word (and Office's own MML2OMML.XSL) nests a big operator's operand in
+    # m:e. Leaving m:e empty and emitting the operand as a following sibling of
+    # m:nary is schema-valid and renders in the right order, but Word's equation
+    # editor then shows an empty operand placeholder with the body sitting
+    # outside the template.
+    omath = omath_for("sum(i=1,n) i")
+    children = list(omath)
+    assert [etree.QName(child).localname for child in children] == ["nary"]
+    e = children[0].find(qname(M_NS, "e"))
+    assert e is not None
+    assert "".join(e.itertext()) == "i"
+
+
+def test_nary_declares_grow_so_the_operator_stretches() -> None:
+    # Without m:grow, Word does not stretch the operator glyph to a tall
+    # operand, so "sum(i=1,n) (a+b)/c" renders a small sigma beside a tall
+    # fraction. MML2OMML.XSL writes m:grow m:val="1" for every operator in
+    # its big-operator list, which covers all of the sum/prod/int characters
+    # this writer emits.
+    nary_pr = omath_for("sum(i=1,n) (a+b)/c").find(".//m:nary/m:naryPr", namespaces=NS)
+    assert nary_pr is not None
+    grow = nary_pr.find(qname(M_NS, "grow"))
+    assert grow is not None
+    assert grow.get(qname(M_NS, "val")) == "1"
+    # CT_NaryPr fixes the child order: chr, limLoc, grow, subHide, supHide.
+    assert [etree.QName(child).localname for child in nary_pr] == [
+        "chr",
+        "limLoc",
+        "grow",
+        "subHide",
+        "supHide",
+    ]
+
+
+def test_nary_operand_scope_stops_at_the_enclosing_mrow() -> None:
+    # "e^x = sum(n=0,oo) x^n/n!" nests the operator and its body in their own
+    # mrow, so only the fraction belongs in m:e — the "e^x =" prefix lives in
+    # the outer mrow and must stay outside m:nary. This is exactly what
+    # MML2OMML.XSL produces for the same MathML.
+    omath = omath_for("e^x = sum(n=0,oo) x^n / n!")
+    assert [etree.QName(child).localname for child in omath] == ["sSup", "r", "nary"]
+    e = omath.find(".//m:nary/m:e", namespaces=NS)
+    assert e is not None
+    assert [etree.QName(child).localname for child in e] == ["f"]
+
+
+def test_nary_absorbs_the_operand_but_lim_does_not() -> None:
+    # The n-ary absorption is gated on the munderover base being an n-ary
+    # operator character. lim(...) is a munder over an mi base, keeps using
+    # m:limLow, and must keep its body as a following sibling.
+    omath = omath_for("lim(x->0) sin(x)/x")
+    assert "nary" not in tags("lim(x->0) sin(x)/x")
+    frac = omath.find(".//m:f", namespaces=NS)
+    assert frac is not None
+    num = frac.find(qname(M_NS, "num"))
+    assert num is not None
+    # The limLow and the sin(x) it applies to are siblings inside the numerator.
+    assert [etree.QName(child).localname for child in num] == ["limLow", "r", "d"]
+
+
+@pytest.mark.parametrize("source", ["sum(i=1,n) i", "prod(k=1,m) k", "sum(i=1,n) (a+b)/c"])
+def test_nested_nary_operand_round_trips(source: str) -> None:
+    # Nesting the operand must not change what omml_to_text reads back: compare
+    # re-parsed trees rather than strings, since "2*x" and "2x" are the same
+    # formula spelled two ways.
+    reconstructed = omml_to_text(omath_for(source))
+    assert etree.tostring(formula_to_mathml(reconstructed)) == etree.tostring(formula_to_mathml(source))
+
+
 def test_int_with_bounds_produces_m_sSubSup_with_both_bounds() -> None:
     # int(0,1) f already worked before this task (msubsup, not munderover) —
     # pin its OMML structure so a future change can't regress it unnoticed the
@@ -308,6 +381,10 @@ def test_int_with_bounds_produces_m_sSubSup_with_both_bounds() -> None:
     assert "".join(ssubsup.find("./m:e", namespaces={"m": M_NS}).itertext()) == "∫"
     assert "".join(ssubsup.find("./m:sub", namespaces={"m": M_NS}).itertext()) == "0"
     assert "".join(ssubsup.find("./m:sup", namespaces={"m": M_NS}).itertext()) == "1"
+    # int(...) is deliberately *not* rerouted into m:nary by the n-ary operand
+    # nesting: it stays m:sSubSup with the integrand as a following sibling.
+    assert [etree.QName(child).localname for child in omath] == ["sSubSup", "r"]
+    assert "nary" not in tags("int(0,1) f")
 
 
 def test_derivative_produces_m_f() -> None:

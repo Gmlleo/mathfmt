@@ -44,11 +44,28 @@ MATHML_TAGS = {
 
 RELATION_SYMBOLS = ("=", "≤", "≥", "≠", "≈", "→", "⇒", "⇌", "<", ">")
 
+# The n-ary big-operator characters this module recognizes, in both directions,
+# kept in one table so they cannot drift apart.
+#
+# Forward (`_nary`): a MathML ``munderover`` only becomes an ``m:nary`` when its
+# base is an ``mo`` holding one of these. Gating on the character — rather than
+# merely on the tag — is what keeps ``lim(x->0)`` out of the n-ary path; ``lim``
+# is a ``munder`` over an ``mi`` base and stays ``m:limLow``.
+#
+# Reverse (`_emit_nary`): the same characters map back to their linear names.
+# ∫ never reaches the reverse path from MathFmt's own writer — ``int(...)``
+# always builds ``m:sSubSup`` (see ``_nary_mathml`` in core.py) — but a
+# Word-authored or hand-authored ``m:nary`` using ∫ is a real, common shape, so
+# it is reconstructed the same way.
+#
+# All three are also in MML2OMML.XSL's own grow-by-default list, which is why
+# `_nary` can write ``m:grow`` unconditionally.
+_NARY_OPERATOR_NAMES = {"∑": "sum", "∏": "prod", "∫": "int"}
+
 
 def mathml_to_omml_py(math_elem: etree._Element) -> etree._Element:
     omath = etree.Element(qname(M_NS, "oMath"))
-    for child in math_elem:
-        _convert(child, omath)
+    _convert_sequence(list(math_elem), omath)
     return omath
 
 
@@ -137,6 +154,53 @@ def _relation_alignment_matrix(
     return omath
 
 
+def _is_nary_operator_group(elem: etree._Element) -> bool:
+    """True for a ``munderover`` that is a bounded big operator (∑, ∏, ∫).
+
+    Deliberately narrow. ``lim(x->0)`` is a ``munder`` whose base is an ``mi``
+    reading "lim"; an annotated reaction arrow is a ``mover``. Neither is an
+    n-ary object, and both must keep their ``m:limLow``/``m:limUpp`` shape with
+    the body left as a following sibling, so this checks the tag, the base
+    being an operator (``mo``), *and* the operator character.
+    """
+    if etree.QName(elem).localname != "munderover":
+        return False
+    base = elem[0] if len(elem) else None
+    if base is None or etree.QName(base).localname != "mo":
+        return False
+    return (base.text or "").strip() in _NARY_OPERATOR_NAMES
+
+
+def _convert_sequence(children: list[etree._Element], parent: etree._Element) -> None:
+    """Convert a run of MathML siblings, nesting an n-ary operator's operand.
+
+    In MathML the operand of a big operator is a *sibling* of the
+    ``munderover``, not a child of it — ``_nary_mathml`` (core.py) emits
+    ``<mrow><munderover>…</munderover><body/></mrow>``. In OMML the operand
+    belongs inside the ``m:nary``'s own ``m:e`` slot, which is what Word and
+    Office's MML2OMML.XSL both produce. Bridging the two needs a view of the
+    sibling list, so every place that converts a sequence of MathML children
+    goes through here rather than looping over ``_convert`` directly.
+
+    The operand is **the rest of the enclosing sequence**. ``_nary_mathml``
+    wraps the operator and its body in an ``mrow`` of exactly two children, so
+    that ``mrow`` boundary is precisely the operand's scope: in
+    ``e^x = sum(n=0,oo) x^n/n!`` only the fraction is absorbed, because the
+    ``e^x =`` prefix lives in the *outer* ``mrow``. MML2OMML.XSL reaches the
+    same answer by a different route — it takes the single
+    ``following-sibling::*[1]`` and then merges adjacent token elements into
+    one run — and the two rules coincide for every shape MathFmt emits.
+    Taking the rest of the sequence, rather than only the next sibling, is the
+    safer reading for foreign MathML: under-scoping would silently render part
+    of the operand as though it sat outside the operator.
+    """
+    for index, child in enumerate(children):
+        if _is_nary_operator_group(child):
+            _nary(child, parent, children[index + 1 :])
+            return
+        _convert(child, parent)
+
+
 def _convert(elem: etree._Element, parent: etree._Element) -> None:
     tag = etree.QName(elem).localname
 
@@ -181,8 +245,7 @@ def _convert(elem: etree._Element, parent: etree._Element) -> None:
     elif tag == "mtable":
         _matrix(elem, parent)
     elif tag == "mrow":
-        for child in elem:
-            _convert(child, parent)
+        _convert_sequence(list(elem), parent)
 
 
 def _text_run(parent: etree._Element, text: str, *, plain: bool = False) -> None:
@@ -214,8 +277,7 @@ def _radical(elem: etree._Element, parent: etree._Element) -> None:
     deg_hide.set(qname(M_NS, "val"), "1")
     etree.SubElement(rad, qname(M_NS, "deg"))
     e = etree.SubElement(rad, qname(M_NS, "e"))
-    for child in elem:
-        _convert(child, e)
+    _convert_sequence(list(elem), e)
 
 
 def _radical_with_degree(elem: etree._Element, parent: etree._Element) -> None:
@@ -274,8 +336,7 @@ def _delimiter(elem: etree._Element, parent: etree._Element) -> None:
     end = etree.SubElement(d_pr, qname(M_NS, "endChr"))
     end.set(qname(M_NS, "val"), elem.get("close", ")"))
     e = etree.SubElement(d, qname(M_NS, "e"))
-    for child in elem:
-        _convert(child, e)
+    _convert_sequence(list(elem), e)
 
 
 def _limit(elem: etree._Element, parent: etree._Element) -> None:
@@ -298,27 +359,30 @@ def _limit_upper(elem: etree._Element, parent: etree._Element) -> None:
         _convert(elem[1], lim)
 
 
-def _nary(elem: etree._Element, parent: etree._Element) -> None:
-    """Build a native ``m:nary`` (big-operator with both bounds) from a
-    MathML ``munderover`` — this is the only shape ``_nary_mathml`` (core.py)
-    ever wraps in ``munderover``, always as ``(operator, under-bound,
-    over-bound)``, for a bounded ``sum``/``prod``.
+def _nary(
+    elem: etree._Element,
+    parent: etree._Element,
+    operand: Sequence[etree._Element] = (),
+) -> None:
+    """Build a native ``m:nary`` (big operator with both bounds) from a MathML
+    ``munderover``, nesting ``operand`` — the operator's MathML siblings, see
+    :func:`_convert_sequence` — inside its ``m:e``.
 
-    This is what Word itself writes for ``∑_{i=1}^{n}`` (``m:nary`` with
-    ``m:naryPr``, ``m:sub``, ``m:sup``, ``m:e``) and gives correct
-    big-operator layout, unlike ``m:limLow``/``m:limUpp`` nested together
-    (which is Word's shape for a *stacked* under/over annotation, not a
-    big-operator template, and has no room for the operator's own glyph
-    alongside its bounds).
+    ``munderover`` over an n-ary operator is the only shape ``_nary_mathml``
+    (core.py) produces for a bounded ``sum``/``prod``, always as ``(operator,
+    under-bound, over-bound)``. (With a single bound it emits a bare ``mo``
+    instead, so there is no ``munder``/``mover`` big-operator case to handle,
+    and ``int(...)`` uses ``msubsup`` — reaching ``m:sSubSup`` — throughout.)
 
-    ``m:e`` is left present but empty: the operand (e.g. the "i" in
-    "sum(i=1,n) i") is a MathML sibling of this ``munderover``, not a child of
-    it (mirroring how the pre-existing ``int(0,1) f`` path already leaves the
-    integrand as a sibling of the ``sSubSup`` it builds, rather than trying to
-    reach across siblings here to nest it inside ``m:e``). This is the same
-    "structurally present, visually empty" shape ``_radical``'s own ``m:deg``
-    already uses for a square root, and keeps this conversion local to one
-    element instead of a fragile lookahead into arbitrary MathML.
+    This is what Word itself writes for ``∑_{i=1}^{n} i``: ``m:nary`` with
+    ``m:naryPr``, ``m:sub``, ``m:sup``, and the operand inside ``m:e``. Leaving
+    ``m:e`` empty and letting the operand fall out as a following sibling is
+    schema-valid and renders in the right visual order, but Word's equation
+    editor then shows an empty operand placeholder with the body sitting
+    outside the template. ``m:limLow``/``m:limUpp`` nested together is not an
+    alternative: that is Word's shape for a *stacked* under/over annotation,
+    not a big-operator template, and has no room for the operator's own glyph
+    alongside its bounds.
     """
     children = list(elem)
     if len(children) < 3:
@@ -331,6 +395,16 @@ def _nary(elem: etree._Element, parent: etree._Element) -> None:
     chr_el.set(qname(M_NS, "val"), children[0].text or "")
     lim_loc = etree.SubElement(nary_pr, qname(M_NS, "limLoc"))
     lim_loc.set(qname(M_NS, "val"), "undOvr")
+    # Without m:grow Word will not stretch the operator glyph to a tall
+    # operand, so "sum(i=1,n) (a+b)/c" renders a small ∑ beside a full-height
+    # fraction. MML2OMML.XSL writes grow="1" for every character in its
+    # big-operator list, which contains all of _NARY_OPERATOR_NAMES, so this is
+    # unconditional. "1"/"0" is both Office's spelling here and this file's own
+    # ST_OnOff convention (compare _radical's degHide) — unlike subHide/supHide
+    # just below, where Office writes "off"/"on" and this file deliberately
+    # keeps the equivalent "0"/"1".
+    grow = etree.SubElement(nary_pr, qname(M_NS, "grow"))
+    grow.set(qname(M_NS, "val"), "1")
     sub_hide = etree.SubElement(nary_pr, qname(M_NS, "subHide"))
     sub_hide.set(qname(M_NS, "val"), "0")
     sup_hide = etree.SubElement(nary_pr, qname(M_NS, "supHide"))
@@ -339,7 +413,10 @@ def _nary(elem: etree._Element, parent: etree._Element) -> None:
     _convert(children[1], sub)
     sup = etree.SubElement(nary, qname(M_NS, "sup"))
     _convert(children[2], sup)
-    etree.SubElement(nary, qname(M_NS, "e"))
+    # m:e stays present even with no operand — CT_Nary requires it, and Word
+    # writes an empty one for a bare "∑_{i=1}^{n}".
+    e = etree.SubElement(nary, qname(M_NS, "e"))
+    _convert_sequence(list(operand), e)
 
 
 def _accent(elem: etree._Element, parent: etree._Element) -> None:
@@ -369,8 +446,7 @@ def _matrix(elem: etree._Element, parent: etree._Element) -> None:
             mr = etree.SubElement(m, qname(M_NS, "mr"))
             for td in child:
                 e = etree.SubElement(mr, qname(M_NS, "e"))
-                for cell_child in td:
-                    _convert(cell_child, e)
+                _convert_sequence(list(td), e)
 
 
 # -- Reverse direction: OMML -> MathFmt linear text -------------------------
@@ -707,15 +783,6 @@ def _emit_limit(elem: etree._Element) -> str:
     )
 
 
-# Reverse of the char values `_nary` (the forward direction, above) writes
-# into m:naryPr/m:chr for MathFmt's own output. Included for completeness:
-# ∫ never reaches this path from MathFmt's own writer (int(...) always uses
-# m:sSubSup — see _nary_mathml in core.py), but a hand-authored or
-# Word-authored m:nary using ∫ is a real, common shape, and this mapping
-# reconstructs it the same way.
-_NARY_OPERATOR_NAMES = {"∑": "sum", "∏": "prod", "∫": "int"}
-
-
 def _emit_nary(elem: etree._Element) -> str:
     """Reconstruct ``m:nary`` as ``name(sub,sup)`` followed by its operand.
 
@@ -723,11 +790,12 @@ def _emit_nary(elem: etree._Element) -> str:
     single-bound or bound-less ``m:nary`` has no ``sum(a,b)``-shaped linear
     form, so it raises rather than guessing at a missing bound.
 
-    The operand can be reached two ways, and both are handled: MathFmt's own
-    forward output leaves ``m:e`` empty and puts the operand in a following
-    OMML sibling (picked up automatically once this function returns, by the
-    normal sibling-concatenation loop in ``_join_emitted``); real Word output
-    nests the operand inside ``m:e`` itself, which is emitted directly here.
+    The operand normally lives inside ``m:e`` — that is what Word writes, and
+    what MathFmt's own :func:`_nary` writes too — and is emitted from there.
+    An ``m:nary`` whose ``m:e`` is empty is still legal (Word writes one for a
+    bare ``∑_{i=1}^{n}``); anything following it in the OMML is picked up by
+    the normal sibling-concatenation loop in ``_join_emitted`` once this
+    function returns, so the reconstructed text is the same either way.
     """
     nary_pr = _find(elem, "naryPr")
     chr_el = _find(nary_pr, "chr") if nary_pr is not None else None
