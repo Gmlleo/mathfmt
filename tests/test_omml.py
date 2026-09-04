@@ -3,8 +3,15 @@ from __future__ import annotations
 import pytest
 from lxml import etree
 
-from mathfmt.core import M_NS, formula_to_mathml, qname
-from mathfmt.omml import XML_NS, OmmlConversionError, combine_equation_array, mathml_to_omml_py, omml_to_text
+from mathfmt.core import ACCENT_CHARS, M_NS, formula_to_mathml, qname
+from mathfmt.omml import (
+    _OMML_ACCENT_CHARS,
+    XML_NS,
+    OmmlConversionError,
+    combine_equation_array,
+    mathml_to_omml_py,
+    omml_to_text,
+)
 
 
 def omath_for(source: str) -> etree._Element:
@@ -75,6 +82,50 @@ def test_annotated_reaction_arrow_produces_upper_limit() -> None:
     assert upper is not None
     assert "".join(upper.find("./m:e", namespaces={"m": M_NS}).itertext()) == "⇒"
     assert "".join(upper.find("./m:lim", namespaces={"m": M_NS}).itertext()) == "heat"
+
+
+def test_accent_produces_m_acc() -> None:
+    root = omath_for("accent(x,bar)")
+    acc = root.find(f".//{{{M_NS}}}acc")
+    assert acc is not None
+    chr_el = acc.find(f"{{{M_NS}}}accPr/{{{M_NS}}}chr")
+    assert chr_el is not None
+    # U+0305 COMBINING OVERLINE — Word's mark, not MathML's spacing U+203E.
+    assert chr_el.get(qname(M_NS, "val")) == "̅"
+    assert acc.find(f"{{{M_NS}}}e") is not None
+    assert "".join(acc.find(f"{{{M_NS}}}e").itertext()) == "x"
+
+
+@pytest.mark.parametrize(
+    ("source", "char"),
+    [
+        ("accent(x,bar)", "̅"),
+        ("accent(y,hat)", "̂"),
+        ("accent(F,vec)", "⃗"),
+        ("accent(q,dot)", "̇"),
+        ("accent(q,ddot)", "̈"),
+    ],
+)
+def test_accent_uses_word_combining_marks(source: str, char: str) -> None:
+    acc = omath_for(source).find(f".//{{{M_NS}}}acc")
+    assert acc.find(f"{{{M_NS}}}accPr/{{{M_NS}}}chr").get(qname(M_NS, "val")) == char
+
+
+def test_annotated_arrow_still_uses_lim_upp() -> None:
+    # mover without accent="true" must keep its existing m:limUpp output.
+    assert "limUpp" in tags("CaCO3 =>[heat] CaO + CO2")
+
+
+def test_every_mathml_accent_has_an_omml_mark() -> None:
+    # A kind added to ACCENT_CHARS without an entry here would fail the whole
+    # apply command rather than being reported as one failed formula.
+    assert set(ACCENT_CHARS.values()) == set(_OMML_ACCENT_CHARS)
+
+
+def test_accent_converts_compound_base_expression() -> None:
+    acc = omath_for("accent(a+b,bar)").find(f".//{{{M_NS}}}acc")
+    e = acc.find(f"{{{M_NS}}}e")
+    assert "".join(e.itertext()) == "a+b"
 
 
 def test_delimited_group_produces_m_d() -> None:

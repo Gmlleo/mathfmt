@@ -40,6 +40,11 @@ MATHML_TAGS = {
 
 RELATION_SYMBOLS = ("=", "≤", "≥", "≠", "≈", "→", "⇒", "⇌", "<", ">")
 
+# MathML uses spacing accent glyphs (see core.ACCENT_CHARS); Word's native m:acc
+# expects combining marks instead. U+0302 (hat) also happens to be OMML's
+# implicit default when m:chr is omitted, but we always set it explicitly.
+_OMML_ACCENT_CHARS = {"‾": "̅", "^": "̂", "→": "⃗", "˙": "̇", "¨": "̈"}
+
 
 def mathml_to_omml_py(math_elem: etree._Element) -> etree._Element:
     omath = etree.Element(qname(M_NS, "oMath"))
@@ -166,7 +171,10 @@ def _convert(elem: etree._Element, parent: etree._Element) -> None:
     elif tag == "munder":
         _limit(elem, parent)
     elif tag == "mover":
-        _limit_upper(elem, parent)
+        if elem.get("accent") == "true":
+            _accent(elem, parent)
+        else:
+            _limit_upper(elem, parent)
     elif tag == "mtable":
         _matrix(elem, parent)
     elif tag == "mrow":
@@ -267,6 +275,20 @@ def _limit_upper(elem: etree._Element, parent: etree._Element) -> None:
         _convert(elem[1], lim)
 
 
+def _accent(elem: etree._Element, parent: etree._Element) -> None:
+    children = list(elem)
+    mathml_char = (children[1].text or "").strip()
+    char = _OMML_ACCENT_CHARS.get(mathml_char)
+    if char is None:
+        raise OmmlConversionError(f"unsupported MathML accent character {mathml_char!r}")
+    acc = etree.SubElement(parent, qname(M_NS, "acc"))
+    acc_pr = etree.SubElement(acc, qname(M_NS, "accPr"))
+    chr_el = etree.SubElement(acc_pr, qname(M_NS, "chr"))
+    chr_el.set(qname(M_NS, "val"), char)
+    e = etree.SubElement(acc, qname(M_NS, "e"))
+    _convert(children[0], e)
+
+
 def _matrix(elem: etree._Element, parent: etree._Element) -> None:
     m = etree.SubElement(parent, qname(M_NS, "m"))
     etree.SubElement(m, qname(M_NS, "mPr"))
@@ -284,7 +306,8 @@ def _matrix(elem: etree._Element, parent: etree._Element) -> None:
 
 
 class OmmlConversionError(ValueError):
-    """Raised when an ``m:oMath`` element uses a construct ``omml_to_text`` cannot reverse."""
+    """Raised when a MathML/OMML construct cannot be converted in the requested direction —
+    forward (unsupported accent character) or reverse (``omml_to_text`` cannot reverse it)."""
 
 
 _REVERSE_OPERATORS = {
