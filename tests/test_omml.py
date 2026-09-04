@@ -362,6 +362,82 @@ def test_nary_absorbs_the_operand_but_lim_does_not() -> None:
     assert [etree.QName(child).localname for child in num] == ["limLow", "r", "d"]
 
 
+def test_nary_operand_is_the_rest_of_the_enclosing_sequence() -> None:
+    # The operand is the remainder of the sequence the operator sits in, not
+    # just the next sibling. For MathFmt's own output the two rules coincide —
+    # `_nary_mathml` always wraps the operator and its body in an mrow of
+    # exactly two children — so this pins the choice against foreign MathML,
+    # where MML2OMML.XSL reaches the same answer for this input by merging
+    # adjacent token elements into a single run.
+    mrow = etree.SubElement(etree.Element("math"), "mrow")
+    munderover = etree.SubElement(mrow, "munderover")
+    etree.SubElement(munderover, "mo").text = "∑"
+    for text in ("i", "n"):
+        etree.SubElement(munderover, "mi").text = text
+    etree.SubElement(mrow, "mi").text = "a"
+    etree.SubElement(mrow, "mo").text = "+"
+    etree.SubElement(mrow, "mi").text = "b"
+
+    omath = mathml_to_omml_py(mrow.getparent())
+    assert [etree.QName(child).localname for child in omath] == ["nary"]
+    assert "".join(omath[0].find(qname(M_NS, "e")).itertext()) == "a+b"
+
+
+def test_munderover_over_a_non_nary_operator_does_not_absorb_its_sibling() -> None:
+    # An mo base is necessary but not sufficient: a doubly-annotated arrow is a
+    # munderover over an operator that is not an n-ary big operator, so it keeps
+    # its stacked-annotation shape and does not swallow what follows it.
+    mrow = etree.SubElement(etree.Element("math"), "mrow")
+    munderover = etree.SubElement(mrow, "munderover")
+    etree.SubElement(munderover, "mo").text = "→"
+    for text in ("cat", "heat"):
+        etree.SubElement(munderover, "mtext").text = text
+    etree.SubElement(mrow, "mi").text = "a"
+
+    omath = mathml_to_omml_py(mrow.getparent())
+    nary = omath[0]
+    assert etree.QName(nary).localname == "nary"
+    assert len(nary.find(qname(M_NS, "e"))) == 0
+    assert [etree.QName(child).localname for child in omath] == ["nary", "r"]
+
+
+def test_munder_over_an_nary_operator_is_not_rerouted_into_m_nary() -> None:
+    # A single-bound big operator is a munder, and `_nary_mathml` never emits
+    # one (with one bound it emits a bare mo instead). Absorption is therefore
+    # gated on the tag as well as the base: a munder keeps its existing
+    # m:limLow shape with the body left as a following sibling, rather than
+    # being silently rerouted through the n-ary writer.
+    mrow = etree.SubElement(etree.Element("math"), "mrow")
+    munder = etree.SubElement(mrow, "munder")
+    etree.SubElement(munder, "mo").text = "∑"
+    etree.SubElement(munder, "mi").text = "i"
+    etree.SubElement(mrow, "mi").text = "a"
+
+    omath = mathml_to_omml_py(mrow.getparent())
+    assert [etree.QName(child).localname for child in omath] == ["limLow", "r"]
+
+
+@pytest.mark.parametrize("base_text", ["x", "∑"])
+def test_munderover_over_a_non_operator_base_does_not_absorb_its_sibling(base_text: str) -> None:
+    # The operand nesting is gated on the base being an *operator* (mo) holding
+    # an n-ary character — both halves matter. A munderover over an ordinary
+    # identifier is an under/over annotation, not a big operator; and an mi
+    # merely *spelling* a summation sign is not one either (MML2OMML.XSL's own
+    # isNary test likewise requires the base to be an mml:mo). In both cases
+    # what follows is not the operator's operand and must stay a sibling.
+    mrow = etree.SubElement(etree.Element("math"), "mrow")
+    munderover = etree.SubElement(mrow, "munderover")
+    for text in (base_text, "i", "n"):
+        etree.SubElement(munderover, "mi").text = text
+    etree.SubElement(mrow, "mi").text = "a"
+
+    omath = mathml_to_omml_py(mrow.getparent())
+    assert [etree.QName(child).localname for child in omath] == ["nary", "r"]
+    e = omath[0].find(qname(M_NS, "e"))
+    assert e is not None
+    assert len(e) == 0
+
+
 @pytest.mark.parametrize("source", ["sum(i=1,n) i", "prod(k=1,m) k", "sum(i=1,n) (a+b)/c"])
 def test_nested_nary_operand_round_trips(source: str) -> None:
     # Nesting the operand must not change what omml_to_text reads back: compare
