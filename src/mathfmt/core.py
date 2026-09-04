@@ -698,11 +698,10 @@ class Parser:
     def _parse_nary(self, name: str) -> Node:
         return Node("nary", name)
 
-    def _parse_physics_function(self, name: str, token: Token) -> Node:
+    def _parse_call_arguments(self, name: str, token: Token, expected_count: int) -> tuple[Node, ...]:
         group = self.parse_group()
         inner = group.children[0]
         arguments = inner.children if inner.kind == "sequence" else (inner,)
-        expected_count = 2 if name in {"partial", "braket"} else 1
         if len(arguments) != expected_count:
             raise FormulaError(
                 f"{name} requires {expected_count} argument{'s' if expected_count != 1 else ''}",
@@ -711,21 +710,16 @@ class Parser:
                 found=str(len(arguments)),
                 source=self.source,
             )
+        return tuple(arguments)
+
+    def _parse_physics_function(self, name: str, token: Token) -> Node:
+        expected_count = 2 if name in {"partial", "braket"} else 1
+        arguments = self._parse_call_arguments(name, token, expected_count)
         kind = "partial_derivative" if name == "partial" else name
-        return Node(kind, children=tuple(arguments))
+        return Node(kind, children=arguments)
 
     def _parse_accent(self, token: Token) -> Node:
-        group = self.parse_group()
-        inner = group.children[0]
-        arguments = inner.children if inner.kind == "sequence" else (inner,)
-        if len(arguments) != 2:
-            raise FormulaError(
-                "accent requires 2 arguments",
-                position=token.start,
-                expected="2 comma-separated arguments",
-                found=str(len(arguments)),
-                source=self.source,
-            )
+        arguments = self._parse_call_arguments("accent", token, 2)
         kind_node = arguments[1]
         if kind_node.kind == "identifier":
             kind = kind_node.value
@@ -745,6 +739,10 @@ class Parser:
                 source=self.source,
             )
         return Node("accent", kind, (arguments[0],))
+
+    def _parse_root(self, token: Token) -> Node:
+        arguments = self._parse_call_arguments("root", token, 2)
+        return Node("root", children=arguments)
 
     def _parse_cases(self) -> Node:
         opener = self.expect("LPAREN")
@@ -844,6 +842,8 @@ class Parser:
                 return self._parse_physics_function(name, token)
             if name == "accent" and self.current.kind == "LPAREN":
                 return self._parse_accent(token)
+            if name == "root" and self.current.kind == "LPAREN":
+                return self._parse_root(token)
             if self.current.kind == "LPAREN":
                 group = self.parse_group()
                 if name in {"sqrt", "√"}:
@@ -978,6 +978,11 @@ def node_to_mathml(node: Node) -> etree._Element:
         root = mml("msqrt")
         root.append(node_to_mathml(node.children[0]))
         return root
+    if node.kind == "root":
+        mroot = mml("mroot")
+        mroot.append(node_to_mathml(node.children[0]))
+        mroot.append(node_to_mathml(node.children[1]))
+        return mroot
     if node.kind == "accent":
         over = mml("mover", accent="true")
         over.append(node_to_mathml(node.children[0]))

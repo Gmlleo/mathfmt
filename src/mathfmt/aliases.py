@@ -31,6 +31,7 @@ RESERVED_ALIAS_TOKENS = frozenset(
         "pPAIR",
         "pi",
         "prod",
+        "root",
         "sin",
         "sqrt",
         "sum",

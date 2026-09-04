@@ -390,3 +390,39 @@ def test_accents_nest() -> None:
     inner = outer[0]
     assert etree.QName(inner).localname == "mover"
     assert inner[1].text == "‾"
+
+
+def test_root_produces_mroot() -> None:
+    math = formula_to_mathml("root(x,3)")
+    mroot = math.find(f".//{{{MML_NS}}}mroot")
+    assert mroot is not None
+    assert [etree.QName(child).localname for child in mroot] == ["mi", "mn"]
+
+
+def test_root_degree_may_be_an_expression() -> None:
+    assert "mroot" in local_tags("root(x,n+1)")
+
+
+def test_sqrt_still_produces_msqrt() -> None:
+    assert "msqrt" in local_tags("sqrt(x)")
+
+
+@pytest.mark.parametrize("source", ["root(x)", "root(x,y,z)"])
+def test_invalid_root_is_rejected(source: str) -> None:
+    with pytest.raises(FormulaError):
+        formula_to_mathml(source)
+
+
+def test_roots_nest() -> None:
+    math = formula_to_mathml("root(root(x,3),2)")
+    outer = math.find(f".//{{{MML_NS}}}mroot")
+    assert [etree.QName(child).localname for child in outer] == ["mroot", "mn"]
+    inner = outer[0]
+    assert [etree.QName(child).localname for child in inner] == ["mi", "mn"]
+
+
+def test_root_preserves_a_compound_base() -> None:
+    math = formula_to_mathml("root(a+b,n)")
+    mroot = math.find(f".//{{{MML_NS}}}mroot")
+    assert [etree.QName(child).localname for child in mroot] == ["mrow", "mi"]
+    assert "".join(mroot[0].itertext()) == "a+b"
