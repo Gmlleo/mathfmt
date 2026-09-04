@@ -142,8 +142,15 @@ def _validate_omml_structure(
                 if not mrad.xpath("boolean(./m:e)", namespaces=NS):
                     result["structural_errors"].append({"part": name, "error": "m:rad missing e"})
 
-            # Script structural checks
-            for tag, roles in [("m:sSup", ["e", "sup"]), ("m:sSub", ["e", "sub"])]:
+            # Script and n-ary structural checks. CT_Nary requires m:sub,
+            # m:sup and m:e — Word writes them present but empty when a bound
+            # is hidden or the operand is blank — so a missing one is malformed
+            # the same way a denominator-less m:f is.
+            for tag, roles in [
+                ("m:sSup", ["e", "sup"]),
+                ("m:sSub", ["e", "sub"]),
+                ("m:nary", ["sub", "sup", "e"]),
+            ]:
                 for script in omath.xpath(f".//{tag}", namespaces=NS):
                     for role in roles:
                         if not script.xpath(f"boolean(./m:{role})", namespaces=NS):
