@@ -466,3 +466,38 @@ def test_decimal_comma_is_now_a_sequence_not_one_number() -> None:
     math = formula_to_mathml("3,14")
     numbers = math.findall(f".//{{{MML_NS}}}mn")
     assert [n.text for n in numbers] == ["3", "14"]
+
+
+def test_bracket_interval_after_identifier_keeps_both_endpoints() -> None:
+    # Regression for Task 5c: "x in [0,1]" used to call parse_group() for the
+    # "[0,1]" bracket, get back a bare "vector" node (not a wrapped "group"
+    # node), and then silently drop everything after the first element when
+    # building the "function" node -- "in(0,1)" renders with the 1 missing.
+    # Task 5b made this reachable for numbers (it used to fuse "0,1" into one
+    # decimal and at least show both digits as "in(0,1)").
+    math = formula_to_mathml("x in [0,1]")
+    fenced = math.find(f".//{{{MML_NS}}}mfenced")
+    assert fenced is not None
+    assert fenced.get("open") == "["
+    assert fenced.get("close") == "]"
+    numbers = fenced.findall(f".//{{{MML_NS}}}mn")
+    assert [n.text for n in numbers] == ["0", "1"]
+
+
+def test_bracket_call_after_identifier_keeps_both_operands() -> None:
+    # Regression for Task 5c: same root cause as the interval case above, via
+    # a plain function-shaped identifier instead of a relation.
+    math = formula_to_mathml("f [a,b]")
+    fenced = math.find(f".//{{{MML_NS}}}mfenced")
+    assert fenced is not None
+    assert fenced.get("open") == "["
+    assert fenced.get("close") == "]"
+    identifiers = fenced.findall(f".//{{{MML_NS}}}mi")
+    assert [i.text for i in identifiers] == ["a", "b"]
+
+
+def test_sqrt_with_single_element_bracket_still_works() -> None:
+    # A single-element [x] is not a comma sequence, so parse_group() returns
+    # a "group" node here (not "vector") and is unaffected by the Task 5c
+    # fix -- confirm it still works.
+    assert "msqrt" in local_tags("sqrt[x]")

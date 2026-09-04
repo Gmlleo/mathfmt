@@ -850,6 +850,18 @@ class Parser:
                     return Node("sqrt", children=group.children)
                 if name == "lim":
                     return Node("limit", children=group.children)
+                if group.kind == "vector":
+                    # parse_group() returns a bare "vector" node (its
+                    # comma-separated elements unwrapped directly into
+                    # children) for a [a,b,...] group, unlike "(" and "{",
+                    # which always wrap their content in one "group" child.
+                    # Treating group.children as a call's argument list here
+                    # would silently drop every element after the first --
+                    # fall back to implicit multiplication instead, exactly
+                    # what parse_mul would have produced had this atom not
+                    # consumed the bracket. This also keeps the brackets
+                    # square instead of forcing them to "()".
+                    return Node("binary", "implicit", (Node("identifier", name), group))
                 return Node("function", name, group.children)
             return Node("identifier", name)
         raise FormulaError(

@@ -14,6 +14,27 @@ All notable changes to MathFmt are documented here.
   2-item vector `1,2` / `3`. Input like `x = 3,14` (European decimal) is no
   longer one number; it now parses as the sequence `3, 14`, which still
   renders as `3,14`. Use `.` for decimals, e.g. `x = 3.14`.
+  This one tokenizer change is user-visible in a few more places:
+  - An explicit subscript like `A_1,2` used to bind the whole `1,2` into the
+    subscript (`A` with subscript `1,2`); it now binds only `1`, and the
+    trailing `,2` becomes a separate sequence item next to it. Write
+    `A_(1,2)` if you want both digits in the subscript.
+  - A thousands separator inside an explicit formula span, e.g. `$1,234$`,
+    used to convert as a single number; it now converts as the three-item
+    sequence `1`, `,`, `234`, with comma-operator spacing. This candidate
+    scores `confidence=high` and is auto-selected, so `mathfmt convert`
+    applies this reformatting without a review step — re-check any existing
+    document containing comma-grouped thousands after upgrading.
+  - Fixed a related, newly-reachable bug in bracket call syntax: an
+    identifier followed by a `[...]` group whose elements are comma-separated
+    (e.g. `x in [0,1]`, `f [a,b]`) used to silently keep only the first
+    element and force the brackets to `()` — `x in [0,1]` rendered as
+    `in(0)`, dropping the `1`. It now falls back to implicit multiplication
+    (`x`⁢`in`⁢`[0,1]`) and keeps every element with its original square
+    brackets. This was already broken for non-numeric elements before this
+    release (`f [a,b]` already dropped `b`); the number tokenizer change made
+    it reachable for numeric intervals too, which is the more common shape
+    in textbooks.
 
 ## [1.2.0] - 2026-09-03
 
