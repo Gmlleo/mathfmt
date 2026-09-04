@@ -718,6 +718,57 @@ def test_omml_to_text_nary_requires_both_bounds() -> None:
         omml_to_text(omath)
 
 
+def _word_nary(
+    omath: etree._Element,
+    *,
+    chr_val: str | None = "∑",
+    with_nary_pr: bool = True,
+    operand: str = "x",
+) -> etree._Element:
+    """Build the m:nary shape Word writes: naryPr, both bounds, operand in m:e."""
+    nary = etree.SubElement(omath, qname(M_NS, "nary"))
+    if with_nary_pr:
+        nary_pr = etree.SubElement(nary, qname(M_NS, "naryPr"))
+        if chr_val is not None:
+            chr_el = etree.SubElement(nary_pr, qname(M_NS, "chr"))
+            chr_el.set(qname(M_NS, "val"), chr_val)
+        for tag, val in (("limLoc", "undOvr"), ("grow", "1")):
+            prop = etree.SubElement(nary_pr, qname(M_NS, tag))
+            prop.set(qname(M_NS, "val"), val)
+    for tag, text in (("sub", "i=1"), ("sup", "n")):
+        container = etree.SubElement(nary, qname(M_NS, tag))
+        run = etree.SubElement(container, qname(M_NS, "r"))
+        etree.SubElement(run, qname(M_NS, "t")).text = text
+    e = etree.SubElement(nary, qname(M_NS, "e"))
+    run = etree.SubElement(e, qname(M_NS, "r"))
+    etree.SubElement(run, qname(M_NS, "t")).text = operand
+    return nary
+
+
+def test_omml_to_text_reads_a_nary_operand_nested_in_m_e() -> None:
+    # The operand of a Word-authored (and, since the operand is now nested,
+    # MathFmt-authored) m:nary lives inside m:e. Dropping it would silently
+    # lose the body of every summation read out of a real document while still
+    # producing a plausible-looking "sum(i=1,n)" — so assert the operand text
+    # itself, not just that the call succeeds.
+    omath = etree.Element(qname(M_NS, "oMath"))
+    _word_nary(omath, operand="k")
+
+    assert omml_to_text(omath) == "sum(i=1,n)k"
+
+
+def test_omml_to_text_reads_a_multi_run_nary_operand() -> None:
+    omath = etree.Element(qname(M_NS, "oMath"))
+    nary = _word_nary(omath)
+    e = nary.find(qname(M_NS, "e"))
+    assert e is not None
+    for text in ("+", "1"):
+        run = etree.SubElement(e, qname(M_NS, "r"))
+        etree.SubElement(run, qname(M_NS, "t")).text = text
+
+    assert omml_to_text(omath) == "sum(i=1,n)x+1"
+
+
 def test_omml_to_text_nary_rejects_unrecognized_operator() -> None:
     omath = etree.Element(qname(M_NS, "oMath"))
     nary = etree.SubElement(omath, qname(M_NS, "nary"))
