@@ -371,6 +371,14 @@ def _suggest_fix(expected: str | None) -> str | None:
         return "An operand is missing here — check for a stray operator or an empty group."
     if expected == "number, identifier, operator, or grouping symbol":
         return "This character isn't recognized — check for a typo or an unsupported symbol."
+    # Raised by latex.py, whose errors carry a column into the *expanded* text
+    # rather than the original LaTeX, so the macro name in the message is the
+    # reliable locator and the hint points at the list rather than the column.
+    if expected == "a supported LaTeX macro":
+        return (
+            "This LaTeX macro is outside MathFmt's supported subset — "
+            "see docs/formula-syntax.md section 10 for the full list."
+        )
     return None
 
 

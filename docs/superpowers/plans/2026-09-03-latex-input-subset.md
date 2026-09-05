@@ -730,6 +730,8 @@ git commit -m "feat(core): add a quoted upright text atom"
 
 This task establishes the module and the no-guessing rejection path. Later tasks add the argument-taking macros on top.
 
+**Revision during implementation — detection stays in step with expansion.** Step 1's detection test as written listed `\frac{a}{b}` and `\begin{cases}`, but neither name is in this task's known set (Task 9 adds `frac`, Task 11 adds `begin`), so the test could only have passed by teaching `contains_latex_macro` names `expand_latex` would then reject as unsupported. That is the wrong invariant to establish: detection is what promotes a span to a scan candidate in Task 13, and expansion is what that candidate is parsed through, so a name known to one but not the other makes the scanner report a formula that can never convert. Both directions read one `KNOWN_MACROS` set instead, and a parametrized test over it pins that they stay in step. `\frac` and `\begin` join the detection tests in Tasks 9 and 11, where their expansion lands — the finished module's behaviour is unchanged.
+
 - [ ] **Step 1: Write the failing tests**
 
 Create `tests/test_latex.py`:
