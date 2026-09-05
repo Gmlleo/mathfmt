@@ -2,6 +2,19 @@
 
 All notable changes to MathFmt are documented here.
 
+## [Unreleased]
+
+### Changed
+- The `dev` extra pins ruff to one minor series (`ruff>=0.16,<0.17`) instead of
+  `ruff>=0.6`. Ruff is pre-1.0, so its formatter's stable style may change in
+  any `0.x.0`: 0.16.0 began formatting Python blocks inside Markdown, which
+  turned a green local run into a nine-platform CI failure with no code change
+  behind it. The floor matches the ceiling's series so a contributor's
+  `pip install -e ".[dev]"` and CI agree on one style rather than disagreeing
+  until a push. No effect on the published package — this is a development
+  dependency only. Contributors on an older ruff should re-run
+  `pip install -e ".[dev]"`.
+
 ## [1.3.0] - 2026-09-05
 
 ### Added
