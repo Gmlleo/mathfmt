@@ -183,6 +183,30 @@ worth being explicit rather than quiet about it:
 
 ---
 
+## v1.4.0 — GUI Formula Preview · GUI 公式预览 (released 2026-09-05)
+
+**Focus:** Close the review loop v1.3 opened. An undelimited LaTeX macro is
+reported at medium confidence and never auto-selected — the right call, but it
+adds review work, and the GUI's review step showed only each candidate's source
+text. Seeing what a formula would become, or fixing one that parsed wrong, meant
+leaving the GUI to hand-edit `candidates.json`.
+
+- [x] Every candidate renders as a real equation, natively in the browser.
+- [x] Each candidate's parser-ready text is editable, re-previewing on blur;
+  a failed edit shows its error and keeps the last good rendering dimmed rather
+  than blanking it, and does not silently deselect the candidate.
+- [x] `POST /preview/<token>`; `linear` and `mathml` on each scanned candidate;
+  `/apply` accepts `{"selected", "linear"}` alongside the bare boolean.
+- [x] Falls back to linear text without MathML support, with editing and
+  server-side validation unaffected.
+- [x] Verified in a real browser — rendering, editing, and the edited formula
+  reaching the converted DOCX — not only through the headless HTTP suite.
+
+Additive throughout: the v1.2 `/apply` payload stays valid and every
+pre-existing GUI test passes untouched. No change to the stable Python API.
+
+---
+
 ## Maintenance Feedback · 维护反馈
 
 - **Bug and compatibility reports** should include a minimal DOCX, the JSON report,
