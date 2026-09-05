@@ -381,8 +381,70 @@ def test_nary_absorbs_the_operand_but_lim_does_not() -> None:
     assert [etree.QName(child).localname for child in num] == ["limLow", "r", "d"]
 
 
+@pytest.mark.parametrize("wrapper", ["mstyle", "semantics", "mpadded"])
+def test_unknown_mathml_tags_are_transparent_not_dropped(wrapper: str) -> None:
+    # _convert recurses through any tag it has no rule for, so presentation-only
+    # wrappers are transparent rather than fatal. This is the module's single
+    # widest foreign-MathML surface: if it ever returned instead of recursing,
+    # every child of an unrecognized element would vanish silently — the exact
+    # mechanism behind both n-ary defects (an unhandled tag being flattened
+    # away). It lost its last exercise when mroot and munderover joined
+    # MATHML_TAGS, so it is pinned explicitly here.
+    mrow = etree.SubElement(etree.Element("math"), "mrow")
+    wrapped = etree.SubElement(mrow, wrapper)
+    etree.SubElement(wrapped, "mi").text = "x"
+    etree.SubElement(wrapped, "mo").text = "+"
+    etree.SubElement(mrow, "mn").text = "1"
+
+    omath = mathml_to_omml_py(mrow.getparent())
+    assert "".join(omath.itertext()) == "x+1"
+
+
+@pytest.mark.parametrize(
+    ("container", "expected_slot"),
+    [
+        # An n-ary operator and its operand as direct children of a container,
+        # with no intervening mrow — the shape hand-written and third-party
+        # MathML takes. Every container that converts a sibling sequence must
+        # nest the operand, not just the mrow path: MML2OMML.XSL nests it in
+        # all of them too.
+        ("msqrt", "rad"),
+        ("mfenced", "d"),
+    ],
+)
+def test_nary_operand_nests_inside_every_container(container: str, expected_slot: str) -> None:
+    parent = etree.SubElement(etree.Element("math"), container)
+    munderover = etree.SubElement(parent, "munderover")
+    etree.SubElement(munderover, "mo").text = "∑"
+    for text in ("i", "n"):
+        etree.SubElement(munderover, "mi").text = text
+    etree.SubElement(parent, "mi").text = "a"
+
+    omath = mathml_to_omml_py(parent.getparent())
+    slot = omath.find(f".//m:{expected_slot}/m:e", namespaces=NS)
+    assert slot is not None
+    assert [etree.QName(child).localname for child in slot] == ["nary"]
+    assert "".join(slot[0].find(qname(M_NS, "e")).itertext()) == "a"
+
+
+def test_nary_operand_nests_inside_a_matrix_cell() -> None:
+    mtable = etree.SubElement(etree.Element("math"), "mtable")
+    mtd = etree.SubElement(etree.SubElement(mtable, "mtr"), "mtd")
+    munderover = etree.SubElement(mtd, "munderover")
+    etree.SubElement(munderover, "mo").text = "∑"
+    for text in ("i", "n"):
+        etree.SubElement(munderover, "mi").text = text
+    etree.SubElement(mtd, "mi").text = "a"
+
+    omath = mathml_to_omml_py(mtable.getparent())
+    cell = omath.find(".//m:m/m:mr/m:e", namespaces=NS)
+    assert cell is not None
+    assert [etree.QName(child).localname for child in cell] == ["nary"]
+    assert "".join(cell[0].find(qname(M_NS, "e")).itertext()) == "a"
+
+
 def _flat_foreign_sum() -> etree._Element:
-    """The canonical LaTeXML/MathJax serialization of ``\sum_{i=1}^{n} a = S``:
+    r"""The canonical LaTeXML/MathJax serialization of ``\sum_{i=1}^{n} a = S``:
     one flat mrow, with the summand and the relation all siblings of the
     operator."""
     mrow = etree.SubElement(etree.Element("math"), "mrow")
