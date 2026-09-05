@@ -77,17 +77,24 @@ Unicode subscript chars become plain ASCII:
 The tokenizer uses this regex (simplified):
 
 ```
+STRING  : "[^"]*"
 NUMBER  : \d+(?:\.\d+)?
 IDENT   : sqrt | lim | exp | sin | cos | tan | Delta | pi | inf
         | e[pv] | pPAIR | DERV\d+
-        | [A-Za-z](?:\d+)? | [ΔπΓ∞]
-OP      : <= | >= | != | ~= | -> | => | +/- | [+−*/^=<>±≠≤≥≈→⇒·×÷]
+        | [A-Za-z](?:\d+)? | [ΔπΓ∞∇]
+OP      : <= | >= | != | ~= | -> | => | +/- | [+−*/^=<>±∓≠≤≥≈→⇒·×÷]
 LPAREN  : ( [ {
 RPAREN  : ) ] }
 COMMA   : ,
 IF      : if
 SEMI    : ;
 ```
+
+`STRING` is matched ahead of `NUMBER` and `IDENT`, so a quoted run is one
+opaque token and its contents are never lexed as the expression they
+resemble: `"a + 1, b"` is text. A lone `"` matches nothing and is an error.
+
+`∂` is deliberately **not** tokenizable on its own — see §10 and §6.
 
 Whitespace between tokens is ignored.
 
@@ -108,6 +115,7 @@ would make a comma do double duty.
 | `a, b, c` | IDENT(a) COMMA IDENT(b) COMMA IDENT(c) |
 | `3.14` | NUMBER(3.14) |
 | `3,14` | NUMBER(3) COMMA NUMBER(14) |
+| `3 "kg"` | NUMBER(3) STRING("kg") |
 
 ---
 
@@ -120,13 +128,18 @@ add        → mul (OP_add mul)*
 mul        → power (OP_mul power | power)*     // implicit multiply via adjacency
 power      → unary ("^" power)?
 unary      → OP_unary unary | atom
-atom       → NUMBER | IDENT | group | function | sqrt | limit | derivative
+atom       → NUMBER | IDENT | STRING | group | function
+           | sqrt | root | accent | limit | derivative
 group      → "(" sequence ")" | "[" sequence "]" | "{" sequence "}"
 function   → IDENT "(" sequence ")"
 sqrt       → "sqrt" "(" sequence ")"
+root       → "root" "(" radicand "," degree ")"
+accent     → "accent" "(" base "," accent_kind ")"
 limit      → "lim" "(" sequence ")"
 derivative → DERV{N}                            // injected by preprocessor
 ```
+
+`accent_kind` is one of `bar`, `hat`, `vec`, `dot`, `ddot`.
 
 ### Operator sets
 
@@ -237,9 +250,15 @@ mathematical symbol without editing MathFmt source code:
 
 Alias tokens must start with an ASCII letter and contain only ASCII letters or
 digits. Each value must be exactly one Unicode mathematical symbol. Core syntax
-names such as `sqrt`, `lim`, `sum`, `cases`, `partial`, `bra`, and `ket` are
-reserved and cannot be overridden. Invalid, duplicate, or unsupported entries stop
-the command with a clear error.
+names such as `sqrt`, `lim`, `sum`, `cases`, `partial`, `bra`, `ket`, `accent`,
+and `root` are reserved and cannot be overridden. Invalid, duplicate, or
+unsupported entries stop the command with a clear error. The alias branch runs
+before construct dispatch, so an unreserved alias would silently shadow a
+documented construct instead of failing loudly at load — which is why `accent`
+and `root` were added to the reserved set in v1.3.0.
+
+The quoted upright text atom (`"已知"`) needs no reservation: it is introduced by
+a quote, not by a name an alias could claim.
 
 Aliases affect parsing, not candidate discovery. Keep a custom standalone symbol
 inside `$...$`, or use it in a formula with a normal scanner anchor such as `=`.
@@ -262,8 +281,11 @@ The same alias profile must be supplied to `scan`, `apply`, and review-aware
 | `subsup` tensor | `m:msubsup` |
 | `bra`, `ket`, `braket` | Angle/bar `m:mfenced` delimiters |
 | user alias | `m:mi` for letter-like symbols or `m:mo` for operator-like symbols |
+| `text` `"已知"` | `m:mtext` (upright, contents not parsed as math) |
 | `group` `(...)` | `m:mfenced` |
 | `sqrt` | `m:msqrt` |
+| `root` `root(x,3)` | `m:mroot` |
+| `accent` `accent(x,bar)` | `m:mover` with `accent="true"` |
 | `function` `sin(…)` | `m:mrow(m:mi(sin), m:mfenced(…))` |
 | `limit` `lim(p→0)` | `m:munder(m:mi(lim), …)` |
 | `unary` `−x` | `m:mrow(m:mo(−), …)` |
@@ -288,11 +310,21 @@ DOCX text can mark formulas explicitly:
 |---|---|---|---|
 | `$x^2 + 1$` | `$x^2 + 1$` | `x^2 + 1` | `false` |
 | `$$y = 2$$` | `$$y = 2$$` | `y = 2` | `true` |
+| `\(x^2 + 1\)` | `\(x^2 + 1\)` | `x^2 + 1` | `false` |
+| `\[ y = 2x \]` | `\[ y = 2x \]` | `y = 2x` | `true` |
 
 Explicit delimiter candidates are treated as high-confidence formulas even when the
 inner formula has no heuristic anchor operator. During `apply`, MathFmt removes the
 delimiters and inserts only the native Word equation. Simple currency-like spans such
 as `$12.00$` are ignored.
+
+An **undelimited** LaTeX span — a macro in running prose, such as `\bar{x}` or
+`\sum_{i=1}^{n} i` — is reported at **medium** confidence and is not selected
+automatically, because the author did not mark it as math. It must contain a
+macro MathFmt knows *and* parse before it becomes a candidate at all, so a
+Windows path such as `C:\Users\name` (several backslash-letter sequences, none
+of them macros) and an unsupported macro such as `\substack{a}` are both left
+as prose. See §10.
 
 ### Chemistry-specific detection
 
@@ -520,3 +552,74 @@ guessing at a wrong answer:
 - An `m:nary` missing one of its two bounds (`m:sub`/`m:sup`), or naming an
   operator character other than `∑`, `∏`, or `∫` — and other elements outside
   the list above
+
+---
+
+## 10. LaTeX input subset
+
+Since v1.3.0 a formula may be written in a documented subset of LaTeX instead of
+MathFmt's linear syntax. The subset is expanded to linear syntax before parsing,
+so everything the rest of this document describes applies unchanged. **Anything
+outside the subset is rejected with an error naming the macro** — it is never
+guessed at, because an unconverted formula is reviewable and a silently wrong
+one is not.
+
+### Supported
+
+| LaTeX | Expands to | Notes |
+|---|---|---|
+| `\alpha` … `\omega`, `\Gamma` … `\Omega` | `α` … `ω`, `Γ` … `Ω` | All 24 lower-case and 11 upper-case letters |
+| `\leq` `\le` `\geq` `\ge` `\neq` `\ne` | `≤` `≥` `≠` | |
+| `\approx` `\equiv` `\pm` `\mp` | `≈` `≡` `±` `∓` | |
+| `\times` `\cdot` `\div` | `×` `·` `÷` | |
+| `\to` `\rightarrow` `\Rightarrow` `\leftrightarrow` | `→` `⇒` `<->` | |
+| `\in` `\notin` `\subset` `\subseteq` `\cup` `\cap` | `∈` `∉` `⊂` `⊆` `∪` `∩` | |
+| `\infty` `\nabla` `\partial` | `∞` `∇` `∂` | `\partial` — see limitation 3 below |
+| `\sin` `\cos` `\tan` `\log` `\ln` `\exp` `\lim` `\sum` `\int` `\prod` | the bare name | |
+| `\,` `\;` `\!` `\quad` `\qquad` | one space | LaTeX's widths have no linear equivalent |
+| `\frac{a}{b}` `\dfrac` `\tfrac` | `(a)/(b)` | Every argument is parenthesized |
+| `\sqrt{x}` | `sqrt(x)` | |
+| `\sqrt[n]{x}` | `root(x,n)` | |
+| `\bar{x}` `\overline{x}` | `accent(x,bar)` | |
+| `\hat{x}` `\vec{x}` `\dot{x}` `\ddot{x}` | `accent(x,hat)` etc. | |
+| `\text{已知}` `\mathrm{d}` | `"已知"` `"d"` | The quoted upright text atom (§2) |
+| `\left(` `\right)` | `(` `)` | The delimiter is kept; MathML stretches fences itself |
+| `x_{i}` `x^{n+1}` | `x_(i)` `x^(n+1)` | |
+| `\sum_{i=1}^{n}` `\int_{a}^{b}` `\prod_{k=1}^{m}` | `sum(i=1,n)` etc. | Both bounds are required |
+| `\lim_{x \to 0}` | `lim(x→0)` | |
+| `\begin{matrix}`, `pmatrix`, `bmatrix` | `[[a,b],[c,d]]` | `&` between cells, `\\` between rows |
+| `\begin{cases}` | `{a, cond; b, cond}` | Each row needs a value **and** a condition |
+| `\begin{aligned}`, `align`, `align*` | rows kept for the multi-line layout (§5) | |
+
+### Not supported
+
+Rejected with an error naming the macro, never approximated:
+`\substack`, `\overbrace`, `\underbrace`, `\mathcal`, `\mathbb`,
+`\operatorname`, `\binom`, `\newcommand`, and any environment other than
+`matrix`, `pmatrix`, `bmatrix`, `cases`, `aligned`, `align`, `align*`.
+
+### Limitations
+
+1. **Error columns refer to the expanded text, not to your LaTeX.** Expansion
+   happens before parsing, so a parse error's `column` counts characters in the
+   linear form. The macro name in the error message and its `hint` are the
+   reliable locators.
+2. **Bare Unicode symbols are parsed but not discovered.** `∇f = 0` written with
+   no macro and no delimiter converts if you put it in a formula, but the
+   scanner will not find it — wrap it in `$…$`. This is the same rule the alias
+   section (§3) already states.
+3. **A standalone `\partial` / `∂` is not supported**, and higher-order or mixed
+   partials (`∂^2u/∂x^2`, `∂^2f/∂x∂y`) report a parse error for manual review
+   rather than converting. Only the `∂f/∂x` shape converts. This is a deliberate
+   safety choice, not an oversight: `∂` is in the scanner's character set, so
+   making it tokenizable on its own would turn today's reviewable error into a
+   silently wrong conversion.
+4. **A row separator (`\\`) outside an environment is rejected.** It has no
+   meaning there in LaTeX, and accepting it would produce a two-row equation the
+   author never wrote.
+5. **A big operator whose bounds cannot be read is rejected** — only one of the
+   two bounds, or a bound containing parentheses (`\sum_{i=1}^{f(n)}`). Left
+   alone, `sum_(i=1)` parses as an ordinary identifier and Word renders the
+   letters "sum" beside a subscript.
+6. **A quoted text atom reverses through `omml_to_text` as its bare content**,
+   without the quotes — the same way chemistry formulas reverse (§9).

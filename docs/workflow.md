@@ -29,6 +29,19 @@ mathfmt doctor --xsl "C:\path\to\MML2OMML.XSL"
 
 All commands that produce OMML (`apply`, `convert`) accept `--xsl` to override backend selection.
 
+**Which backend you actually get.** `--xsl` is not what turns Microsoft's
+stylesheet on. Every OMML-producing command calls `find_xsl()` when `--xsl` is
+not given, and falls back to the built-in Python backend only when that finds
+nothing. So on a Windows machine with Office installed, the default output comes
+from Microsoft's XSL, not from `omml.py` — `--xsl` only points at a *specific*
+file. `mathfmt doctor` reports which backend is in use (`office-xsl` or
+`python`). There is no CLI flag that forces the Python backend on a machine that
+has Office; to exercise it there, call the library directly
+(`mathml_to_omml_py(math)`, or `mathml_to_omml(math, transform=None)`).
+
+The **library** default is the opposite of the CLI's: `mathml_to_omml` uses the
+Python backend unless the caller passes a `transform`.
+
 ---
 
 ## 2. GUI: Drag-and-Drop (Fastest)
@@ -158,6 +171,30 @@ To create an aligned multiline equation, edit `linear` during review while keepi
 ```
 
 An actual line break may be used instead of `\\`. Each line must be a valid formula.
+
+#### Scanning a document written in LaTeX
+
+Since v1.3.0 formulas may be written in a documented subset of LaTeX
+(`docs/formula-syntax.md` §10). The scanner grades the two shapes differently:
+
+| In the document | Confidence | Auto-selected |
+|---|---|---|
+| `\(x^2 + 1\)` or `\[ y = 2x \]` | high | yes |
+| `\frac{a}{b}` in running prose | medium | **no** — review it |
+
+A delimited span is math the author marked as such, so it is treated exactly
+like `$…$`. An undelimited macro is real notation the author did *not* mark, so
+it lands in the review list and `mathfmt convert` leaves it alone until you
+select it. Review those candidates the way you would any other medium-confidence
+span, then run `apply`.
+
+Two kinds of text are never offered at all: a Windows path such as
+`C:\Users\name`, because none of its backslash-letter sequences name a macro,
+and a macro outside the supported subset such as `\substack{a}`, because the
+detector requires the span to actually parse. An unsupported macro inside an
+explicit `$…$` or `\(…\)` span *is* reported, with a `parse_error` naming the
+macro and a `hint` pointing at §10 — it stays in your document unconverted, for
+you to rewrite.
 
 ### Step 2 — Review
 

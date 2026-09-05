@@ -136,7 +136,24 @@ def contains_latex_macro(text: str) -> bool:
     return any(_macro_name(match.group()) in KNOWN_MACROS for match in MACRO_RE.finditer(text))
 
 
-def expand_latex(source: str) -> str:
+def looks_like_latex(text: str) -> bool:
+    r"""True when the text contains anything *shaped* like a macro.
+
+    The wider of the two questions, and the two have different jobs.
+    :func:`contains_latex_macro` asks "is this LaTeX I can handle?" and gates
+    *discovery*, where a false positive would offer the reader a candidate that
+    can never convert. This one asks "is this LaTeX at all?" and gates
+    *expansion* of a formula the reader already chose, where the useful answer
+    to ``$\substack{a}$`` is the macro's name and a pointer to the supported
+    list — not a tokenizer complaint about an unrecognized backslash.
+
+    The row separator ``\\`` is not macro-shaped, so MathFmt's own multi-line
+    syntax is not mistaken for LaTeX.
+    """
+    return MACRO_RE.search(text) is not None
+
+
+def expand_latex(source: str, *, allow_row_breaks: bool = False) -> str:
     """Expand the supported LaTeX subset into MathFmt linear syntax.
 
     Five passes, and the order is load-bearing:
@@ -154,8 +171,13 @@ def expand_latex(source: str) -> str:
     Steps 2-5 run per row. Splitting on the surviving row separators first
     keeps them intact for ``core.split_multiline_formula`` while letting every
     other pass work on separator-free text.
+
+    ``allow_row_breaks`` says the caller already treats ``\\\\`` as a row
+    separator of its own. Only ``core.split_multiline_formula`` does — there it
+    is MathFmt's documented separator, so a reviewed multi-line formula whose
+    rows happen to contain macros is not refused for carrying one.
     """
-    if ROW_BREAK_RE.search(source) and not ENVIRONMENT_RE.search(source):
+    if not allow_row_breaks and ROW_BREAK_RE.search(source) and not ENVIRONMENT_RE.search(source):
         raise FormulaError(
             "A row separator is only meaningful inside an aligned, matrix, or cases environment",
             expected="a supported LaTeX macro",

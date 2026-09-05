@@ -558,13 +558,22 @@ def test_unsupported_latex_macro_raises_formula_error() -> None:
         formula_to_mathml(r"\substack{a}")
 
 
-def test_a_formula_with_no_macro_never_reaches_the_expander() -> None:
-    # The expander runs only when a known macro is present, so ordinary linear
-    # formulas — and the backslash-bearing text that is not LaTeX at all — are
-    # unaffected by the wiring.
+def test_a_formula_with_no_backslash_never_reaches_the_expander() -> None:
+    # Ordinary linear formulas take the path they always did.
     assert "mfrac" in local_tags("(a)/(b)")
-    with pytest.raises(FormulaError):
-        formula_to_mathml(r"C:\Users\gml85")
+
+
+@pytest.mark.parametrize("source", [r"\substack{a}", r"C:\Users\gml85"])
+def test_an_unsupported_macro_in_a_chosen_formula_is_named(source: str) -> None:
+    # Discovery never offers either of these, but a reader can still put one
+    # inside $…$ and ask for it. At that point the useful answer names the
+    # macro and points at the supported list, rather than a tokenizer
+    # complaint about an unrecognized backslash.
+    with pytest.raises(FormulaError) as excinfo:
+        formula_to_mathml(source)
+    details = excinfo.value.to_dict()
+    assert "does not support the LaTeX macro" in str(details["message"])
+    assert "section 10" in str(details["hint"])
 
 
 def test_an_aligned_environment_keeps_its_rows_for_the_multiline_splitter() -> None:
@@ -614,3 +623,11 @@ def test_a_bare_macro_span_does_not_overlap_a_delimited_one() -> None:
     spans = candidate_spans(r"由此 \(\frac{a}{b}\) 成立")
     assert len(spans) == 1
     assert spans[0].explicit is True
+
+
+def test_a_reviewed_multiline_formula_may_contain_latex_macros() -> None:
+    # `\\` is this splitter's own documented row separator, so a reviewed
+    # multiline formula is not refused for carrying one — even though a bare
+    # `\\` means nothing in LaTeX and is refused everywhere else.
+    assert split_multiline_formula(r"a = \alpha \\ c = d") == ["a = α", "c = d"]
+    assert split_multiline_formula(r"a = b \\ c = d") == ["a = b", "c = d"]

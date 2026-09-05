@@ -2,7 +2,37 @@
 
 All notable changes to MathFmt are documented here.
 
-## [1.3.0]
+## [1.3.0] - 2026-09-05
+
+### Added
+- **A documented subset of LaTeX may now be used as formula input.** Greek
+  letters, relation/set operators, function names and spacing macros;
+  `\frac`/`\dfrac`/`\tfrac`; `\sqrt{x}` and `\sqrt[n]{x}`; the accent macros
+  `\bar` `\overline` `\hat` `\vec` `\dot` `\ddot`; `\text{…}`/`\mathrm{…}`;
+  `\left`/`\right`; `_{…}`/`^{…}` scripts; bounded `\sum`/`\int`/`\prod` and
+  `\lim`; and the `matrix`/`pmatrix`/`bmatrix`/`cases`/`aligned`/`align`
+  environments. Anything outside the subset is **rejected with an error naming
+  the macro** and a hint pointing at the full list, rather than being guessed
+  at. See `docs/formula-syntax.md` §10 for the table and the six documented
+  limitations.
+- **Scanning learned two LaTeX shapes.** `\(…\)` and `\[…\]` join `$…$`/`$$…$$`
+  as explicit, high-confidence, auto-selected spans (inline and display
+  respectively). An *undelimited* macro in prose — `\bar{x}`, `\sum_{i=1}^{n} i`
+  — is a new **medium**-confidence candidate that is never auto-selected, so it
+  reaches the review list without being converted unattended. A span must both
+  contain a macro MathFmt knows and actually parse before it is offered at all,
+  so a Windows path such as `C:\Users\name` and an unsupported macro such as
+  `\substack{a}` stay prose.
+- `root(x, 3)` — an n-th root as a native `m:rad` with a degree, distinct from
+  `sqrt(x)`. Reverses through `omml_to_text`.
+- `accent(x, bar)` — overbar, hat, vector arrow, dot and double-dot accents as
+  native `m:acc` with Word's combining marks. Reverses through `omml_to_text`.
+- A quoted upright text atom: `x = 3 "kg"` renders `kg` as upright `m:mtext`
+  rather than italic variables. Its contents are never parsed as math, so
+  `"a + 1, b"` stays text. It reverses as its bare content, without the quotes.
+- `∇` and `∓` are now tokenized, so they parse when they reach a formula. Like
+  the other bare Unicode symbols they are not picked up by generic candidate
+  discovery — wrap them in `$…$`.
 
 ### Changed
 - A comma is no longer accepted as a decimal separator in formula numbers: the
@@ -55,6 +85,28 @@ All notable changes to MathFmt are documented here.
   (e.g. `sum(i=1,n) i` converted as if it read `∑i=1ni`, with no subscript or
   superscript at all). `int(0,1) f` was and remains unaffected — integral
   bounds already used `m:sSubSup`, not `m:nary`.
+
+### Fixed
+- A `munderover` whose base is not an n-ary operator — a doubly-annotated
+  arrow, or any base that is not `∑`/`∏`/`∫` in an `mo` — no longer becomes a
+  malformed `m:nary` whose `m:chr` holds the base's entire text (`m:val="lim"`,
+  three characters in an attribute the format defines as one) with an empty
+  `m:e` and the operand orphaned as a following sibling. It now becomes the
+  nested `m:limUpp`/`m:limLow` pair Word writes for that shape, which is
+  lossless.
+- Pretty-printed MathML input no longer produces an `m:chr` padded with the
+  newlines and indentation around the operator character, which MathFmt's own
+  reverse converter then refused to read. The operator's text is normalized the
+  way `MML2OMML.XSL` normalizes it.
+- `mroot` is no longer flattened by `mathml_to_omml_py`'s unknown-tag fallback,
+  which silently dropped the radical.
+- Bracket call syntax no longer drops arguments (see the `Changed` entry above
+  for the full description).
+- `omml_to_text` reads an `m:nary` that omits `m:naryPr`/`m:chr` as the
+  summation ISO/IEC 29500 documents as that element's default, instead of
+  rejecting it. A *present* `m:chr` carrying no `m:val` still raises — the
+  default covers an absent property, not a valueless one.
+- `mathfmt validate` flags an `m:nary` missing `m:sub`, `m:sup`, or `m:e`.
 
 ## [1.2.0] - 2026-09-03
 

@@ -140,6 +140,49 @@ Python API or CLI commands added through v1.1.
 
 ---
 
+## v1.3.0 — LaTeX Input Subset · LaTeX 输入子集 (released 2026-09-05)
+
+**Focus:** Accept the notation people already have. Textbook and exam sources are
+routinely written in LaTeX, and retyping them into MathFmt's linear syntax was
+the single largest barrier to using the tool on real material.
+
+- [x] A documented LaTeX subset as formula input, expanded to linear syntax
+  before parsing. Anything outside the subset is rejected with an error naming
+  the macro, never approximated (`docs/formula-syntax.md` §10).
+- [x] Three new native constructs the subset expands into: `root(x, n)`,
+  `accent(x, kind)`, and a quoted upright text atom.
+- [x] `\(…\)` and `\[…\]` as explicit high-confidence scan spans; undelimited
+  macros as a new medium-confidence, never-auto-selected candidate.
+- [x] `∇` and `∓` tokenized; `∂` deliberately left untokenizable on its own.
+- [x] An end-to-end acceptance document (`doc07_latex`) held to the same
+  scan → convert → validate gate as every other supported notation.
+
+### This revises the stable-maintenance policy · 本次修订稳定维护策略
+
+The maintenance policy above admits minor releases for "backward-compatible
+additions only when required by a supported platform or a demonstrated
+maintenance need," and states that stable maintenance implies no
+supported-syntax changes. **This release changes supported syntax**, so it is
+worth being explicit rather than quiet about it:
+
+- **What changed.** The set of accepted input grew (LaTeX, three constructs, two
+  characters). Nothing that parsed before parses differently, with the single
+  exception recorded under `Changed` in `CHANGELOG.md`: `accent` and `root`
+  became reserved alias tokens, so an alias profile defining either name is now
+  rejected at load. `RESERVED_ALIAS_TOKENS` had not been extended since v0.4.0;
+  this is the first time.
+- **Why it ships in a minor release.** `docs/api.md` requires a major version for
+  changes to *accepted input*, and this is strictly an addition — every v1.2
+  document still converts identically. The alias reservation is the one
+  narrowing, and the alternative is worse: the alias branch runs before
+  construct dispatch, so an unreserved `accent` alias would silently shadow a
+  documented construct instead of failing loudly at load.
+- **What this does not signal.** MathFmt remains a single-maintainer project in
+  stable maintenance. This was a bounded, demonstrated need, not a return to
+  feature development.
+
+---
+
 ## Maintenance Feedback · 维护反馈
 
 - **Bug and compatibility reports** should include a minimal DOCX, the JSON report,

@@ -1459,7 +1459,7 @@ def formula_to_mathml(
     return root
 
 
-def _expanded_latex(source: str) -> str:
+def _expanded_latex(source: str, *, allow_row_breaks: bool = False) -> str:
     """``source`` with its LaTeX macros expanded, or unchanged if it has none.
 
     The import is function-local: ``latex`` imports this module for its error
@@ -1469,10 +1469,19 @@ def _expanded_latex(source: str) -> str:
     text — here for the whole formula, and in
     :func:`split_multiline_formula` for text that may still be several rows —
     so that everything downstream of either only ever sees linear syntax.
-    """
-    from .latex import contains_latex_macro, expand_latex
 
-    return expand_latex(source) if contains_latex_macro(source) else source
+    The gate is ``looks_like_latex``, not ``contains_latex_macro``: this text
+    is a formula somebody already chose to convert, so an *unsupported* macro
+    should be named as one rather than reaching the tokenizer and being
+    reported as an unrecognized backslash. Discovery uses the narrower question
+    (see :func:`_latex_macro_spans`), where offering a candidate that can never
+    convert would be the worse error.
+    """
+    from .latex import expand_latex, looks_like_latex
+
+    if not looks_like_latex(source):
+        return source
+    return expand_latex(source, allow_row_breaks=allow_row_breaks)
 
 
 def split_multiline_formula(source: str) -> list[str]:
@@ -1481,8 +1490,12 @@ def split_multiline_formula(source: str) -> list[str]:
     LaTeX is expanded before the split, not after: an ``aligned`` environment's
     rows are only separators once the environment around them is gone, and
     splitting first would hand each half an unbalanced ``\\begin``/``\\end``.
+
+    ``\\\\`` is this function's own documented separator, so the expander is
+    told not to refuse one: a reviewed multi-line formula whose rows contain
+    macros is a legitimate shape here even though it is not one in LaTeX.
     """
-    source = _expanded_latex(source)
+    source = _expanded_latex(source, allow_row_breaks=True)
     lines = re.split(r"\\\\|\r\n?|\n", source)
     if len(lines) == 1:
         return [source]

@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 MathFmt is a Python CLI tool & library that converts plain-text math formulas (e.g. `x^2+1`, `sqrt(a/b)`, `lim(x->0)`) embedded in `.docx` files into native Office Math Markup Language (OMML) equations. Designed for textbooks, exams, and technical reports.
 
 - **Author:** Leo (gml853503962@gmail.com)
-- **Version:** 1.2.0 (see `src/mathfmt/_version.py`)
+- **Version:** 1.3.0 (see `src/mathfmt/_version.py`)
 - **License:** MIT
 - **Repo:** https://github.com/Gmlleo/mathfmt
 - **Python:** 3.10–3.14 (pure Python, no native extensions)
@@ -31,8 +31,11 @@ MathFmt/
 │   ├── cli.py             # argparse CLI: 7 subcommands (~570 lines)
 │   ├── gui.py              # mathfmt gui: stdlib-only local browser drag-and-drop server
 │   ├── aliases.py         # Validated user symbol-alias profiles
-│   ├── core.py            # Formula parser, scanner, and conversion pipeline (~2200 lines — the engine)
+│   ├── accents.py         # The accent kinds, in every representation they need
+│   ├── nary.py            # The n-ary big operators, in every representation they need
+│   ├── core.py            # Formula parser, scanner, and conversion pipeline (~2300 lines — the engine)
 │   ├── docxio.py          # Bounded ZIP I/O and hardened OOXML parsing
+│   ├── latex.py           # LaTeX input subset → linear syntax (pure text-to-text)
 │   ├── omml.py            # Pure-Python MathML→OMML converter
 │   ├── plugins.py         # Stable custom-recognizer extension API
 │   ├── update.py          # Self-update checker (GitHub Releases API)
@@ -40,10 +43,11 @@ MathFmt/
 ├── tests/                 # pytest unit and acceptance suite
 │   ├── helpers.py         # Synthetic DOCX builder, fake XSL, OMML template
 │   ├── fixtures/          # Static test fixtures
-│   ├── acceptance/        # gen_docs.py: builds versioned acceptance documents (doc01…doc06)
+│   ├── acceptance/        # gen_docs.py: builds versioned acceptance documents (doc01…doc07)
 │   ├── test_acceptance.py, test_aliases.py, test_benchmark.py, test_cli.py,
 │   │   test_core.py, test_docx.py, test_docxio.py, test_formula.py, test_gui.py,
-│   │   test_omml.py, test_plugins.py, test_public_api.py, test_skill.py,
+│   │   test_latex.py, test_omml.py, test_plugins.py, test_public_api.py,
+│   │   test_skill.py,
 │   │   test_update.py, test_validate.py
 ├── docs/
 │   ├── formula-syntax.md  # Complete grammar reference, preprocessing, MathML mapping
@@ -93,6 +97,34 @@ Key functions exported via `__init__.py`:
 - `find_xsl(explicit=None)` → locate Office MML2OMML.XSL if available
 - `validate_docx(...)` → validate structure, formula coverage, and compatibility
 - `FormulaRecognizer` / `FormulaCandidate` → typed custom candidate detection
+
+### `latex.py` — LaTeX input subset expander
+
+A pure text-to-text transform (no lxml, no MathML): the documented LaTeX subset
+becomes MathFmt's linear syntax before parsing. Anything outside the subset raises
+`FormulaError` naming the macro rather than being guessed at. Five passes, in a
+load-bearing order — environments, argument macros, scripts, limit binding, symbols
+— documented on `expand_latex`.
+
+`core` imports it from *inside* `formula_to_mathml`, not at module scope, because
+`latex` imports `core` for its error type; a module-scope import would close the cycle.
+
+Two questions with different jobs, and they must not be swapped: `contains_latex_macro`
+("is this LaTeX I can handle?") gates *discovery*, where a false positive offers a
+candidate that can never convert; `looks_like_latex` ("is this LaTeX at all?") gates
+*expansion* of a formula already chosen, so an unsupported macro is named rather than
+reaching the tokenizer as an unrecognized backslash.
+
+### `accents.py` / `nary.py` — Shared symbol tables
+
+One row per accent kind / big operator, so the linear name, the MathML character, and
+the OMML/Word mark cannot drift apart. Both exist because the correspondence previously
+lived in three independent tables and a row added to one but not the others produced
+output the reverse converter then refused to read. Adding a row teaches every direction
+at once. `nary.py` also holds the two n-ary defaults, deliberately under different
+names and different characters: `FALLBACK_NARY_CHAR` is what the writer emits for an
+unknown name, `OMML_IMPLIED_NARY_CHAR` is what ISO/IEC 29500 says an absent `m:naryPr`
+means.
 
 ### `omml.py` — Built-in MathML→OMML converter
 Pure Python, no Office required. Cross-platform default backend. Key function:
