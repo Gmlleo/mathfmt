@@ -572,3 +572,45 @@ def test_an_aligned_environment_keeps_its_rows_for_the_multiline_splitter() -> N
     # environment produces are the multiline splitter's business, not its own.
     # This pins that the expansion reaches that splitter intact.
     assert split_multiline_formula(r"\begin{aligned} a=b \\ c=d \end{aligned}") == ["a=b", "c=d"]
+
+
+def test_latex_inline_delimiters_are_high_confidence() -> None:
+    spans = candidate_spans(r"由此可得 \(x^2 + 1\) 成立")
+    assert len(spans) == 1
+    assert spans[0].explicit is True
+    assert spans[0].linear == "x^2 + 1"
+
+
+def test_latex_display_delimiters_are_detected() -> None:
+    spans = candidate_spans(r"\[ y = 2x \]")
+    assert len(spans) == 1
+    assert spans[0].explicit is True
+    assert spans[0].display is True
+    assert spans[0].linear == "y = 2x"
+
+
+def test_bare_macro_span_is_detected() -> None:
+    spans = candidate_spans(r"其中 \frac{a}{b} 是比值")
+    assert len(spans) == 1
+    assert spans[0].explicit is False
+    assert r"\frac{a}{b}" in spans[0].source
+
+
+def test_windows_path_is_not_a_candidate() -> None:
+    # \Users names no macro, so the path is not LaTeX and the generic walk
+    # cannot reach it either — MATH_CHARS excludes the backslash.
+    assert candidate_spans(r"文件位于 C:\Users\gml85 目录") == []
+
+
+def test_unparseable_macro_span_is_not_a_candidate() -> None:
+    # The bare-macro detector is guarded by a real parse, so an unsupported
+    # macro is not offered for review as though it could convert.
+    assert candidate_spans(r"见 \substack{a} 一节") == []
+
+
+def test_a_bare_macro_span_does_not_overlap_a_delimited_one() -> None:
+    # The delimited detector runs first and claims its range; the macro
+    # detector must not offer the same text a second time.
+    spans = candidate_spans(r"由此 \(\frac{a}{b}\) 成立")
+    assert len(spans) == 1
+    assert spans[0].explicit is True

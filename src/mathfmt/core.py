@@ -1582,6 +1582,32 @@ def _latex_delimited_spans(text: str) -> list[CandidateSpan]:
     index = 0
 
     while index < len(text):
+        # \[…\] and \(…\) are LaTeX's own delimiters and carry the same weight
+        # as $…$: the author marked the span as math, so it is explicit (and
+        # therefore high confidence) and its contents are the parser-ready
+        # text. The two differ only in whether the span is display or inline.
+        opened = next(
+            (
+                pair
+                for pair in (("\\[", "\\]", True), ("\\(", "\\)", False))
+                if text.startswith(pair[0], index)
+            ),
+            None,
+        )
+        if opened is not None:
+            _, closer, display = opened
+            end = text.find(closer, index + 2)
+            if end == -1:
+                index += 2
+                continue
+            span_end = end + 2
+            inner = text[index + 2 : end].strip()
+            if inner:
+                spans.append(CandidateSpan(index, span_end, text[index:span_end], inner, display, True))
+                claimed.append((index, span_end))
+            index = span_end
+            continue
+
         if text.startswith("$$", index):
             end = text.find("$$", index + 2)
             if end == -1:
@@ -1683,6 +1709,66 @@ def _physics_spans(text: str, claimed: Sequence[tuple[int, int]]) -> list[Candid
     return spans
 
 
+# A macro followed by the run of characters a formula may be written in. The
+# class is what stops the span at surrounding prose: CJK text, the sentence
+# punctuation around it, and `$` are all outside it, so `\frac{a}{b} 是比值`
+# reaches only as far as the closing brace. Tabs and spaces are included
+# because a formula contains them; a newline is not, so a span never crosses
+# two lines of a paragraph.
+LATEX_MACRO_SPAN_RE = re.compile(r"\\[A-Za-z]+\*?[A-Za-z0-9\\{}\[\]()_^+\-*/=<>,.'!|&; \t]*")
+
+
+def _longest_parseable_prefix(candidate: str) -> str:
+    """The longest prefix of ``candidate``, cut at a space, that parses.
+
+    The span pattern is deliberately permissive at its right edge, so the
+    operand of ``\\sum_{i=1}^{n} i`` is picked up but so is whatever ASCII
+    follows a formula in the same sentence. Shrinking a token at a time and
+    keeping the first prefix that parses is what settles the boundary; a
+    candidate none of whose prefixes parse yields no span at all.
+    """
+    text = candidate.rstrip().rstrip(TRIM_PUNCT)
+    while text:
+        try:
+            formula_to_mathml(text)
+        except FormulaError:
+            cut = text.rfind(" ")
+            if cut == -1:
+                return ""
+            text = text[:cut].rstrip().rstrip(TRIM_PUNCT)
+            continue
+        return text
+    return ""
+
+
+def _latex_macro_spans(text: str, claimed: Sequence[tuple[int, int]]) -> list[CandidateSpan]:
+    """Find undelimited LaTeX spans — medium confidence, never auto-selected.
+
+    Two guards, both necessary. The span must contain a macro this project
+    knows, which is what keeps a Windows path (``C:\\Users\\gml85``: several
+    backslash-letter sequences, no macros) from becoming a candidate. And some
+    prefix of it must actually parse, so an unsupported macro is not offered
+    for review as though it could convert.
+    """
+    from .latex import contains_latex_macro
+
+    spans: list[CandidateSpan] = []
+    occupied = list(claimed)
+    for match in LATEX_MACRO_SPAN_RE.finditer(text):
+        if not contains_latex_macro(match.group()):
+            continue
+        source = _longest_parseable_prefix(match.group())
+        if not source:
+            continue
+        start = match.start()
+        end = start + len(source)
+        if _range_overlaps(start, end, occupied):
+            continue
+        spans.append(CandidateSpan(start, end, source))
+        occupied.append((start, end))
+    return spans
+
+
 def _physics_kind(source: str) -> str | None:
     for pattern, kind in (
         (PARTIAL_DERIVATIVE_SCAN_RE, "partial_derivative"),
@@ -1722,6 +1808,10 @@ def candidate_spans(
     candidates.extend(chemistry_spans)
     chemistry_ranges = [(span.start, span.end) for span in chemistry_spans]
     claimed_ranges.extend(chemistry_ranges)
+
+    macro_spans = _latex_macro_spans(text, claimed_ranges)
+    candidates.extend(macro_spans)
+    claimed_ranges.extend((span.start, span.end) for span in macro_spans)
 
     index = 0
     while index < len(text):
@@ -1875,6 +1965,13 @@ def scan_docx(
                 elif span.explicit:
                     confidence = "high"
                     reason = "explicit LaTeX delimiter"
+                elif "\\" in source:
+                    # An undelimited LaTeX span. Testing for a backslash is
+                    # enough and needs no import: MATH_CHARS excludes it, so no
+                    # other built-in detector can produce a span containing
+                    # one, and a delimited span was already handled above.
+                    confidence = "medium"
+                    reason = "LaTeX macro without delimiters; review required"
                 elif chemistry_kind == "reaction":
                     confidence = "high"
                     reason = "chemical reaction pattern"
