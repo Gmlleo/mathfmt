@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from mathfmt.core import FormulaError
-from mathfmt.latex import KNOWN_MACROS, contains_latex_macro, expand_latex
+from mathfmt.accents import ACCENT_CHARS
+from mathfmt.core import FormulaError, formula_to_mathml
+from mathfmt.latex import (
+    ACCENT_MACROS,
+    KNOWN_MACROS,
+    contains_latex_macro,
+    expand_latex,
+)
 
 
 @pytest.mark.parametrize(
@@ -73,3 +79,65 @@ def test_detection_and_expansion_agree_on_every_known_macro(name: str) -> None:
         # A macro may still complain about *missing arguments* — a different,
         # legitimate error. It must never claim to be unsupported.
         assert "does not support" not in str(error)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (r"\frac{a}{b}", "(a)/(b)"),
+        (r"\dfrac{a}{b}", "(a)/(b)"),
+        (r"\tfrac{a}{b}", "(a)/(b)"),
+        (r"\frac{\frac{a}{b}}{c}", "((a)/(b))/(c)"),
+        (r"\frac{a+b}{c-d}", "(a+b)/(c-d)"),
+        (r"\sqrt{x}", "sqrt(x)"),
+        (r"\sqrt[3]{x}", "root(x,3)"),
+        (r"\sqrt[n+1]{x}", "root(x,n+1)"),
+        (r"\bar{x}", "accent(x,bar)"),
+        (r"\overline{x}", "accent(x,bar)"),
+        (r"\hat{y}", "accent(y,hat)"),
+        (r"\vec{F}", "accent(F,vec)"),
+        (r"\dot{q}", "accent(q,dot)"),
+        (r"\ddot{q}", "accent(q,ddot)"),
+        (r"\text{已知}", '"已知"'),
+        (r"\mathrm{d}", '"d"'),
+        (r"\left( a \right)", "( a )"),
+        (r"\frac{\bar{x}}{\sqrt{n}}", "(accent(x,bar))/(sqrt(n))"),
+        (r"\frac{\alpha}{2}", "(α)/(2)"),
+    ],
+)
+def test_argument_macros_expand(source: str, expected: str) -> None:
+    assert expand_latex(source).replace(" ", "") == expected.replace(" ", "")
+
+
+def test_sqrt_with_degree_never_becomes_a_two_argument_sqrt() -> None:
+    # sqrt(x,3) would silently render "x, 3" inside the radical.
+    assert "sqrt(x,3)" not in expand_latex(r"\sqrt[3]{x}")
+
+
+def test_fraction_arguments_are_parenthesized_before_they_are_joined() -> None:
+    # The linear form is flat, so an unparenthesized numerator would rebind:
+    # a+b/c-d is not (a+b)/(c-d). Every argument is wrapped, even a single
+    # letter, rather than wrapped only when it "looks compound".
+    assert formula_to_mathml(expand_latex(r"\frac{a+b}{c-d}")) is not None
+    assert expand_latex(r"\frac{a+b}{c-d}") == "(a+b)/(c-d)"
+
+
+def test_text_macro_may_not_smuggle_a_quote_into_the_text_atom() -> None:
+    # The expansion target is MathFmt's quoted text atom, whose contents run to
+    # the next quote — so a quote inside would terminate it early and the rest
+    # would be lexed as math.
+    with pytest.raises(FormulaError):
+        expand_latex(r'\text{a"b}')
+
+
+@pytest.mark.parametrize("source", [r"\frac{a}", r"\frac{a}{b", r"\bar{}", r"\sqrt"])
+def test_malformed_arguments_are_rejected(source: str) -> None:
+    with pytest.raises(FormulaError):
+        expand_latex(source)
+
+
+def test_every_accent_macro_names_a_real_accent_kind() -> None:
+    # accent(x,<kind>) is parsed by core against ACCENT_CHARS, so a typo here
+    # would expand cleanly and then fail at parse time with an error pointing
+    # at the expanded text rather than at the macro the author wrote.
+    assert set(ACCENT_MACROS.values()) <= set(ACCENT_CHARS)
