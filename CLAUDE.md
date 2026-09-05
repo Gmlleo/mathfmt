@@ -184,10 +184,16 @@ mathfmt convert input.docx --output output.docx
 
 ## Two OMML Backends
 
-1. **Built-in Python** (`omml.py`) — the default, cross-platform, no dependencies beyond lxml. Always available.
-2. **Microsoft Office XSL** — optional, detected via `find_xsl()`. Used only when `--xsl` is explicitly passed (or the caller provides a `transform`).
+1. **Built-in Python** (`omml.py`) — cross-platform, no dependencies beyond lxml. Always available.
+2. **Microsoft Office XSL** — used automatically when present.
 
-When available, the Office XSL backend generally produces output closer to Word's native equation editor. The Python backend is the safe default and works everywhere.
+**The CLI auto-detects the XSL and prefers it.** `convert`, `apply`, and `validate` all call `find_xsl()` when `--xsl` is not given and fall back to the Python backend only on `FileNotFoundError` (`cli.py:313-317`, and the equivalents near `cli.py:124`, `455`, `504`). So on a machine with Office installed, the default output comes from Microsoft's XSL, not from `omml.py`.
+
+This matters when working on `omml.py`: a change there will not show up in a local `mathfmt convert` on a Windows machine with Office. Exercise the Python backend directly through `mathml_to_omml_py`, or via `mathml_to_omml(math, transform=None)`.
+
+The **library** default is the opposite of the CLI's: `mathml_to_omml` uses the Python backend unless the caller passes a `transform`.
+
+When available, the Office XSL backend generally produces output closer to Word's native equation editor. The Python backend works everywhere and is what non-Windows users, CI, and machines without Office actually get.
 
 ---
 
