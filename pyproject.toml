@@ -75,6 +75,14 @@ exclude_also = [
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+# Ruff 0.16 began formatting Python code blocks inside Markdown. The docs here
+# quote *fragments* — lines lifted out of a re.compile(...) call, a method body
+# shown without its class — and formatting each fence as a standalone module
+# strips the indentation that shows where the excerpt belongs and inserts blank
+# lines between what were adjacent lines. That damages the documents rather
+# than tidying them, so Markdown is not ruff's to format. Python snippets in
+# docs stay the maintainer's responsibility to keep readable.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["F", "I", "UP"]
