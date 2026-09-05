@@ -62,6 +62,24 @@ RELATION_SYMBOLS = ("=", "≤", "≥", "≠", "≈", "→", "⇒", "⇌", "<", "
 
 
 def mathml_to_omml_py(math_elem: etree._Element) -> etree._Element:
+    """Convert a MathML ``<math>`` element to an OMML ``m:oMath`` tree.
+
+    The pure-Python backend: no Office, no XSL. Accepts foreign MathML, not
+    only MathFmt's own — a tag with no rule here is transparent (its children
+    are converted in its place) rather than fatal, so presentation wrappers
+    such as ``mstyle`` or ``semantics`` pass through.
+
+    One structural rule is worth knowing when handing this hand-written input:
+    a big operator's operand is a *sibling* in MathML but a *child* (``m:e``)
+    in OMML, and the operand taken is **the single next sibling**, unwrapped if
+    it is an ``mrow`` — the same selection Office's MML2OMML.XSL makes.
+    Anything after that stays outside the operator. See
+    :func:`_convert_sequence`.
+
+    Raises :class:`OmmlConversionError` for a construct that cannot be
+    converted faithfully (an unsupported accent character, a malformed
+    ``mroot``/``munderover``) rather than emitting a lossy approximation.
+    """
     omath = etree.Element(qname(M_NS, "oMath"))
     _convert_sequence(list(math_elem), omath)
     return omath
@@ -169,11 +187,23 @@ def _operator_char(elem: etree._Element) -> str:
 def _is_nary_operator_group(elem: etree._Element) -> bool:
     """True for a ``munderover`` that is a bounded big operator (∑, ∏, ∫).
 
-    Deliberately narrow. ``lim(x->0)`` is a ``munder`` whose base is an ``mi``
-    reading "lim"; an annotated reaction arrow is a ``mover``. Neither is an
-    n-ary object, and both must keep their ``m:limLow``/``m:limUpp`` shape with
-    the body left as a following sibling, so this checks the tag, the base
-    being an operator (``mo``), *and* the operator character.
+    Deliberately narrow, and all three conditions carry weight:
+
+    * the **tag**, because a single-bound big operator would be a ``munder``
+      or ``mover``, which OMML expresses through ``subHide``/``supHide`` — a
+      shape ``_nary_mathml`` never emits (with one bound it emits a bare
+      ``mo``), so it is left on the limit path rather than half-supported;
+    * the base being an **operator** (``mo``), which is also what
+      MML2OMML.XSL's ``isNary`` requires — an ``mi`` merely spelling ``∑`` is
+      an identifier, not a big operator;
+    * the **character**, which is what keeps ``lim(x->0)`` out: it is a
+      ``munder`` over an ``mi`` reading "lim".
+
+    A ``munderover`` failing this test is not an n-ary object and must not
+    reach :func:`_nary`, whose ``m:chr`` is an ``ST_Char``. It goes to
+    :func:`_stacked_limits` instead, which is Word's shape for a base carrying
+    both an under- and an over-annotation — a doubly-annotated reaction arrow,
+    say. Either way its following sibling stays a sibling.
     """
     if etree.QName(elem).localname != "munderover":
         return False
@@ -200,8 +230,8 @@ def _convert_sequence(children: list[etree._Element], parent: etree._Element) ->
     ``m:nary``.
 
     Taking the *rest* of the sequence instead would agree on everything
-    MathFmt emits, since ``_nary_mathml`` returns an ``mrow`` of operator and
-    body. It diverges on flat foreign MathML — the shape LaTeXML and MathJax
+    MathFmt emits, since wherever ``_nary_mathml`` produces a ``munderover``
+    it wraps it in an ``mrow`` with exactly one following sibling. It diverges on flat foreign MathML — the shape LaTeXML and MathJax
     produce for ``\sum_{i=1}^{n} a = S`` is one flat ``mrow`` — and there it
     is wrong: ``m:e`` carries ``grow="1"``, so absorbing ``a = S`` stretches
     the summation sign across the equals sign. MathFmt's own grammar settles
@@ -428,9 +458,15 @@ def _nary(
 
     ``munderover`` over an n-ary operator is the only shape ``_nary_mathml``
     (core.py) produces for a bounded ``sum``/``prod``, always as ``(operator,
-    under-bound, over-bound)``. (With a single bound it emits a bare ``mo``
-    instead, so there is no ``munder``/``mover`` big-operator case to handle,
-    and ``int(...)`` uses ``msubsup`` — reaching ``m:sSubSup`` — throughout.)
+    under-bound, over-bound)``. With a single bound it emits a bare ``mo``
+    instead, so there is no ``munder``/``mover`` big-operator case to handle
+    here. ``int(...)`` never reaches this function from MathFmt's own writer:
+    *with* bounds it builds an ``msubsup`` and so an ``m:sSubSup``, and
+    *without* them a bare ``mo`` beside its integrand. (That leaves ``int`` the
+    one n-ary operator whose operand MathFmt does not nest — a known divergence
+    from Word, tracked separately, not an oversight here.) Foreign MathML can
+    still hand this function a ``munderover`` over ``∫``, and it is converted
+    like any other big operator.
 
     This is what Word itself writes for ``∑_{i=1}^{n} i``: ``m:nary`` with
     ``m:naryPr``, ``m:sub``, ``m:sup``, and the operand inside ``m:e``. Leaving
@@ -455,9 +491,19 @@ def _nary(
     lim_loc.set(qname(M_NS, "val"), "undOvr")
     # Without m:grow Word will not stretch the operator glyph to a tall
     # operand, so "sum(i=1,n) (a+b)/c" renders a small ∑ beside a full-height
-    # fraction. MML2OMML.XSL writes grow="1" for every character in its
-    # big-operator list, which contains all of NARY_NAMES, so this is
-    # unconditional. "1"/"0" is both Office's spelling here and this file's own
+    # fraction.
+    #
+    # MML2OMML.XSL decides grow in two steps: it reads the operator's
+    # @stretchy first, honoring stretchy="false" with grow="0" and
+    # stretchy="true" with grow="1", and only falls back to its big-operator
+    # character list when the attribute is absent. That list contains every
+    # character in NARY_NAMES, so for unannotated input — all of MathFmt's own
+    # output, which never sets @stretchy — the answer is always "1", and this
+    # is written unconditionally. The cost is that a foreign <mo
+    # stretchy="false"> is not honored; that is a deliberate, narrow
+    # divergence, not the whole rule restated.
+    #
+    # "1"/"0" is both Office's spelling for this element and this file's own
     # ST_OnOff convention (compare _radical's degHide) — unlike subHide/supHide
     # just below, where Office writes "off"/"on" and this file deliberately
     # keeps the equivalent "0"/"1".

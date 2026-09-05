@@ -589,15 +589,6 @@ def test_nary_normalizes_a_whitespace_padded_operator() -> None:
     assert omml_to_text(omath) == "sum(i,n)a"
 
 
-@pytest.mark.parametrize("source", ["sum(i=1,n) i", "prod(k=1,m) k", "sum(i=1,n) (a+b)/c"])
-def test_nested_nary_operand_round_trips(source: str) -> None:
-    # Nesting the operand must not change what omml_to_text reads back: compare
-    # re-parsed trees rather than strings, since "2*x" and "2x" are the same
-    # formula spelled two ways.
-    reconstructed = omml_to_text(omath_for(source))
-    assert etree.tostring(formula_to_mathml(reconstructed)) == etree.tostring(formula_to_mathml(source))
-
-
 def test_int_with_bounds_produces_m_sSubSup_with_both_bounds() -> None:
     # int(0,1) f already worked before this task (msubsup, not munderover) —
     # pin its OMML structure so a future change can't regress it unnoticed the
@@ -836,6 +827,7 @@ def reparsed_omath(source: str) -> etree._Element:
         "sum(i=1,n) i",
         "sum(i=1,10) i",
         "prod(k=1,m) k",
+        "sum(i=1,n) (a+b)/c",  # operand nested in m:e is a fraction, not a run
         "int(0,1) f",
         "H2O",
         "Ca(OH)2",
