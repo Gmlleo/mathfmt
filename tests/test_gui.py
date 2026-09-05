@@ -6,6 +6,7 @@ import shutil
 import threading
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +58,7 @@ def _post_scan(
 def _post_apply(
     base_url: str,
     token: str,
-    selection: dict[str, bool],
+    selection: dict[str, object],
     *,
     strict: bool = False,
     stem: str = "output",
@@ -556,3 +557,83 @@ def test_preview_rejects_an_empty_formula(tmp_path: Path, running_server: Any) -
 
     assert status == 200
     assert payload["ok"] is False
+
+
+def _apply_and_read_document(
+    tmp_path: Path, base_url: str, paragraph: str, selection_for: Any
+) -> tuple[dict[str, object], str]:
+    """Scan one paragraph, apply `selection_for(candidate)`, return the output XML."""
+    source = make_docx(tmp_path / "edit.docx", document_xml=_document_with(paragraph))
+    status, scanned = _post_scan(base_url, source)
+    assert status == 200
+    candidate = next(c for c in scanned["candidates"] if c["source"])
+    token = str(scanned["token"])
+
+    status, applied = _post_apply(base_url, token, {candidate["id"]: selection_for(candidate)})
+    assert status == 200
+
+    document = ""
+    if applied.get("output_available"):
+        with urllib.request.urlopen(f"{base_url}/download/{token}") as resp:
+            archive = zipfile.ZipFile(io.BytesIO(resp.read()))
+            document = archive.read("word/document.xml").decode("utf-8")
+    return applied, document
+
+
+def test_apply_writes_an_edited_linear_into_the_output(tmp_path: Path, running_server: Any) -> None:
+    # The point of the feature: what the reader typed is what gets converted,
+    # not what the scanner found.
+    base_url, _ = running_server
+    applied, document = _apply_and_read_document(
+        tmp_path,
+        base_url,
+        "公式 $x^2$ 在此。",
+        lambda c: {"selected": True, "linear": "(a+b)/c"},
+    )
+
+    assert applied["converted"] == 1
+    assert "oMath" in document
+    assert "<m:den>" in document or "m:den" in document
+
+
+def test_apply_still_accepts_a_bare_boolean_selection(tmp_path: Path, running_server: Any) -> None:
+    # The v1.2 payload shape stays valid — every pre-existing test in this file
+    # sends bare booleans and must keep passing untouched.
+    base_url, _ = running_server
+    applied, document = _apply_and_read_document(tmp_path, base_url, "公式 $x^2$ 在此。", lambda c: True)
+
+    assert applied["converted"] == 1
+    assert "oMath" in document
+
+
+def test_apply_reports_an_edited_linear_that_does_not_parse(tmp_path: Path, running_server: Any) -> None:
+    # The page previews before sending, but the server never trusts it: the
+    # edit is re-parsed here. A bad edit is reported through the existing
+    # `skipped` channel rather than failing the whole request.
+    base_url, _ = running_server
+    applied, _ = _apply_and_read_document(
+        tmp_path,
+        base_url,
+        "公式 $x^2$ 在此。",
+        lambda c: {"selected": True, "linear": "x +"},
+    )
+
+    assert applied["converted"] == 0
+    assert applied["skipped"] == 1
+    assert applied["skipped_items"]
+    assert applied["skipped_items"][0]["reason"]
+
+
+def test_apply_ignores_a_blank_edit_and_keeps_the_scanned_text(tmp_path: Path, running_server: Any) -> None:
+    # Clearing the field is not a way to delete a candidate — it falls back to
+    # what the scanner found rather than converting an empty formula.
+    base_url, _ = running_server
+    applied, document = _apply_and_read_document(
+        tmp_path,
+        base_url,
+        "公式 $x^2$ 在此。",
+        lambda c: {"selected": True, "linear": "   "},
+    )
+
+    assert applied["converted"] == 1
+    assert "oMath" in document

@@ -132,6 +132,32 @@ def _mathml_for(candidate: Mapping[str, object]) -> str | None:
         return None
 
 
+def _apply_selection_entry(candidate: dict[str, object], entry: object) -> None:
+    """Fold one page-supplied selection entry into a scanned candidate.
+
+    Two shapes, because the page gained inline editing after the payload was
+    designed: a bare boolean (v1.2, still valid) or ``{"selected", "linear"}``.
+
+    An edited ``linear`` is written straight into the review — which is exactly
+    the hand-edited ``candidates.json`` flow ``apply_docx`` has supported since
+    v0.3, so the conversion side needs no new logic and an edit that does not
+    parse is already reported through ``skipped``. It is *not* trusted, either:
+    ``apply_docx`` re-parses it, so a client that skipped the preview cannot
+    smuggle anything past the parser.
+
+    A blank edit falls back to the scanned text. Clearing the field is not a
+    way to delete a candidate, and converting an empty formula is never what
+    the reader meant.
+    """
+    if not isinstance(entry, dict):
+        candidate["selected"] = bool(entry)
+        return
+    candidate["selected"] = bool(entry.get("selected"))
+    edited = entry.get("linear")
+    if isinstance(edited, str) and edited.strip():
+        candidate["linear"] = edited.strip()
+
+
 def _truncate(text: str, limit: int) -> str:
     text = text or ""
     if len(text) <= limit:
@@ -347,7 +373,7 @@ class _Handler(BaseHTTPRequestHandler):
             for candidate in review.get("candidates", []):
                 candidate_id = candidate.get("id")
                 if candidate_id in selection:
-                    candidate["selected"] = bool(selection[candidate_id])
+                    _apply_selection_entry(candidate, selection[candidate_id])
             review_path.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
 
             result = apply_docx(
