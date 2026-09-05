@@ -57,36 +57,6 @@ All notable changes to MathFmt are documented here.
   m:val`) instead of the previous `does not support the accent character
   None`. Both cases already raised `OmmlConversionError`; only the message
   changed, so code matching on the old text needs updating.
-- **A bounded `sum`/`prod` now writes its operand inside the equation's own
-  operand slot**, and marks the operator as growing. Previously the slot was
-  left empty and the body emitted beside it: the equation rendered in the right
-  order, but Word's equation editor showed an empty placeholder with the body
-  outside the template, and the operator did not stretch to a tall operand
-  (`sum(i=1,n) (a+b)/c` drew a small sigma next to a full-height fraction).
-  Documents converted before this are still valid and still render; re-run
-  `mathfmt convert` to pick up the new shape.
-- `omml_to_text` reads an `m:nary` that omits `m:naryPr`, or its `m:chr`, as a
-  summation — the operator ISO/IEC 29500 documents as that element's default —
-  instead of rejecting it. A *present* `m:chr` naming an operator it does not
-  know still raises.
-
-### Fixed
-- **A `munderover` that is not a big operator no longer produces a malformed
-  equation.** Any such element — a doubly-annotated reaction arrow, or any base
-  that is not one of `∑ ∏ ∫` — was written as an n-ary object whose operator
-  attribute held the base's whole text (`lim`, three characters in an attribute
-  the format defines as one), with an empty operand slot and the body stranded
-  beside it. These now become the stacked under/over annotation Word uses.
-- The operator character is normalized before being written, so pretty-printed
-  MathML (an `<mo>` carrying newlines and indentation around its symbol) no
-  longer produces an equation that MathFmt's own reader then refuses.
-
-### Validation
-- `mathfmt validate` now structurally checks `m:nary`, reporting a missing
-  `m:sub`, `m:sup` or `m:e` the same way it already reports a fraction missing
-  its denominator. **This can flag documents that previously passed** — the
-  check is new, not the malformation.
-
 ## [1.3.0] - 2026-09-05
 
 ### Added
@@ -170,6 +140,12 @@ All notable changes to MathFmt are documented here.
   (e.g. `sum(i=1,n) i` converted as if it read `∑i=1ni`, with no subscript or
   superscript at all). `int(0,1) f` was and remains unaffected — integral
   bounds already used `m:sSubSup`, not `m:nary`.
+  The operand is also written inside the operator's own `m:e` slot rather than
+  beside it, and the operator is marked as growing: Word's equation editor
+  previously showed an empty placeholder with the body outside the template,
+  and the sigma did not stretch to a tall operand (`sum(i=1,n) (a+b)/c` drew a
+  small sigma next to a full-height fraction). Documents converted before this
+  are still valid and still render; re-run `mathfmt convert` for the new shape.
 
 ### Fixed
 - A `munderover` whose base is not an n-ary operator — a doubly-annotated
