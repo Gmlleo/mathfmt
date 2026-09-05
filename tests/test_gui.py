@@ -637,3 +637,34 @@ def test_apply_ignores_a_blank_edit_and_keeps_the_scanned_text(tmp_path: Path, r
 
     assert applied["converted"] == 1
     assert "oMath" in document
+
+
+def test_page_parses_mathml_as_xml_and_never_through_innerhtml(running_server: Any) -> None:
+    # A regression guard for a security decision, not a rendering test: this
+    # suite drives HTTP, not a browser. Every other value the page inserts is
+    # escaped; MathML is the only one that must stay markup, so it goes through
+    # DOMParser + importNode. Routing it through innerHTML instead would put
+    # server-supplied document text on the other side of the HTML parser for
+    # the first time in this file.
+    base_url, _ = running_server
+    with urllib.request.urlopen(f"{base_url}/") as resp:
+        page = resp.read().decode("utf-8")
+
+    assert "DOMParser" in page
+    assert "document.importNode" in page
+    assert "parsererror" in page  # a malformed preview is dropped, not injected
+    assert ".innerHTML = data.mathml" not in page
+    assert "innerHTML = c.mathml" not in page
+
+
+def test_page_offers_an_editable_field_and_a_preview_slot(running_server: Any) -> None:
+    base_url, _ = running_server
+    with urllib.request.urlopen(f"{base_url}/") as resp:
+        page = resp.read().decode("utf-8")
+
+    assert "linear-edit" in page
+    assert "focusout" in page  # blur-triggered, not per keystroke
+    assert "mathml-note" in page  # the no-MathML fallback notice
+    # The row must not be a <label>: it now contains a text field, and a
+    # wrapping label would toggle the checkbox on every click into it.
+    assert "'<label class=\"candidate" not in page
