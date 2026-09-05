@@ -2,6 +2,112 @@
 
 All notable changes to MathFmt are documented here.
 
+## [1.3.0] - 2026-09-05
+
+### Added
+- **A documented subset of LaTeX may now be used as formula input.** Greek
+  letters, relation/set operators, function names and spacing macros;
+  `\frac`/`\dfrac`/`\tfrac`; `\sqrt{x}` and `\sqrt[n]{x}`; the accent macros
+  `\bar` `\overline` `\hat` `\vec` `\dot` `\ddot`; `\text{…}`/`\mathrm{…}`;
+  `\left`/`\right`; `_{…}`/`^{…}` scripts; bounded `\sum`/`\int`/`\prod` and
+  `\lim`; and the `matrix`/`pmatrix`/`bmatrix`/`cases`/`aligned`/`align`
+  environments. Anything outside the subset is **rejected with an error naming
+  the macro** and a hint pointing at the full list, rather than being guessed
+  at. See `docs/formula-syntax.md` §10 for the table and the six documented
+  limitations.
+- **Scanning learned two LaTeX shapes.** `\(…\)` and `\[…\]` join `$…$`/`$$…$$`
+  as explicit, high-confidence, auto-selected spans (inline and display
+  respectively). An *undelimited* macro in prose — `\bar{x}`, `\sum_{i=1}^{n} i`
+  — is a new **medium**-confidence candidate that is never auto-selected, so it
+  reaches the review list without being converted unattended. A span must both
+  contain a macro MathFmt knows and actually parse before it is offered at all,
+  so a Windows path such as `C:\Users\name` and an unsupported macro such as
+  `\substack{a}` stay prose.
+- `root(x, 3)` — an n-th root as a native `m:rad` with a degree, distinct from
+  `sqrt(x)`. Reverses through `omml_to_text`.
+- `accent(x, bar)` — overbar, hat, vector arrow, dot and double-dot accents as
+  native `m:acc` with Word's combining marks. Reverses through `omml_to_text`.
+- A quoted upright text atom: `x = 3 "kg"` renders `kg` as upright `m:mtext`
+  rather than italic variables. Its contents are never parsed as math, so
+  `"a + 1, b"` stays text. It reverses as its bare content, without the quotes.
+- `∇` and `∓` are now tokenized, so they parse when they reach a formula. Like
+  the other bare Unicode symbols they are not picked up by generic candidate
+  discovery — wrap them in `$…$`.
+
+### Changed
+- A comma is no longer accepted as a decimal separator in formula numbers: the
+  `NUMBER` token is now `\d+(?:\.\d+)?` (was `\d+(?:[.,]\d+)?`). A comma is
+  MathFmt's sequence/argument/matrix separator everywhere else, and the two
+  readings collided — the decimal reading always won, so `[[1,2],[3,4]]`
+  silently parsed as a 2x1 matrix of the "numbers" `1,2` and `3,4` instead of
+  a 2x2 integer matrix, and `[1,2,3]` silently lost an element and became the
+  2-item vector `1,2` / `3`. Input like `x = 3,14` (European decimal) is no
+  longer one number; it now parses as the sequence `3, 14`, which still
+  renders as `3,14`. Use `.` for decimals, e.g. `x = 3.14`.
+  This one tokenizer change is user-visible in a few more places:
+  - An explicit subscript like `A_1,2` used to bind the whole `1,2` into the
+    subscript (`A` with subscript `1,2`); it now binds only `1`, and the
+    trailing `,2` becomes a separate sequence item next to it. Write
+    `A_(1,2)` if you want both digits in the subscript.
+  - A thousands separator inside an explicit formula span, e.g. `$1,234$`,
+    used to convert as a single number; it now converts as the three-item
+    sequence `1`, `,`, `234`, with comma-operator spacing. This candidate
+    scores `confidence=high` and is auto-selected, so `mathfmt convert`
+    applies this reformatting without a review step — re-check any existing
+    document containing comma-grouped thousands after upgrading.
+  - Fixed a related, newly-reachable bug in bracket call syntax: an
+    identifier followed by a `[...]` group whose elements are comma-separated
+    (e.g. `x in [0,1]`, `f [a,b]`) used to silently keep only the first
+    element and force the brackets to `()` — `x in [0,1]` rendered as
+    `in(0)`, dropping the `1`. It now falls back to implicit multiplication
+    (`x`⁢`in`⁢`[0,1]`) and keeps every element with its original square
+    brackets. This was already broken for non-numeric elements before this
+    release (`f [a,b]` already dropped `b`); the number tokenizer change made
+    it reachable for numeric intervals too, which is the more common shape
+    in textbooks.
+  - `bra(1,2)` and `braket(1,2)` swap behavior as a consequence: `bra(...)`
+    takes exactly 1 argument, so `bra(1,2)` — previously parsed as `bra` of
+    the single number "1,2" — now raises (`bra requires 1 argument`).
+    `braket(...)` takes exactly 2, so `braket(1,2)` — previously rejected for
+    the same reason — now converts.
+- `accent` and `root` are now reserved alias tokens (`RESERVED_ALIAS_TOKENS`):
+  an existing alias profile that defines either name is rejected at load
+  (`Alias token 'accent'/'root' is reserved by MathFmt core syntax`). Both
+  names are now documented constructs (`accent(x,bar)`, `root(x,3)`), and the
+  alias branch runs before construct dispatch, so an unreserved alias would
+  otherwise silently shadow the construct instead of failing loudly.
+- `sum(i=1,n) i` / `prod(k=1,m) k` — a bounded n-ary operator — now converts
+  with both bounds correctly attached as a native OMML big-operator (`m:nary`
+  with `m:sub`/`m:sup`), and `omml_to_text` reverses that shape back to
+  `sum(...)`/`prod(...)`. Previously the MathML `munderover` carrying the
+  bounds fell through `mathml_to_omml_py`'s unknown-tag fallback and was
+  flattened: both bounds were silently dropped into plain adjacent text runs
+  (e.g. `sum(i=1,n) i` converted as if it read `∑i=1ni`, with no subscript or
+  superscript at all). `int(0,1) f` was and remains unaffected — integral
+  bounds already used `m:sSubSup`, not `m:nary`.
+
+### Fixed
+- A `munderover` whose base is not an n-ary operator — a doubly-annotated
+  arrow, or any base that is not `∑`/`∏`/`∫` in an `mo` — no longer becomes a
+  malformed `m:nary` whose `m:chr` holds the base's entire text (`m:val="lim"`,
+  three characters in an attribute the format defines as one) with an empty
+  `m:e` and the operand orphaned as a following sibling. It now becomes the
+  nested `m:limUpp`/`m:limLow` pair Word writes for that shape, which is
+  lossless.
+- Pretty-printed MathML input no longer produces an `m:chr` padded with the
+  newlines and indentation around the operator character, which MathFmt's own
+  reverse converter then refused to read. The operator's text is normalized the
+  way `MML2OMML.XSL` normalizes it.
+- `mroot` is no longer flattened by `mathml_to_omml_py`'s unknown-tag fallback,
+  which silently dropped the radical.
+- Bracket call syntax no longer drops arguments (see the `Changed` entry above
+  for the full description).
+- `omml_to_text` reads an `m:nary` that omits `m:naryPr`/`m:chr` as the
+  summation ISO/IEC 29500 documents as that element's default, instead of
+  rejecting it. A *present* `m:chr` carrying no `m:val` still raises — the
+  default covers an absent property, not a valueless one.
+- `mathfmt validate` flags an `m:nary` missing `m:sub`, `m:sup`, or `m:e`.
+
 ## [1.2.0] - 2026-09-03
 
 ### Added

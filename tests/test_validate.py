@@ -156,6 +156,37 @@ def test_superscript_missing_e_is_flagged(tmp_path: Path) -> None:
     assert any("missing e" in e["error"] for e in report["omml"]["structural_errors"])
 
 
+@pytest.mark.parametrize(
+    ("label", "children", "missing"),
+    [
+        ("nosub", "<m:sup><m:r><m:t>n</m:t></m:r></m:sup><m:e><m:r><m:t>i</m:t></m:r></m:e>", "sub"),
+        ("nosup", "<m:sub><m:r><m:t>i</m:t></m:r></m:sub><m:e><m:r><m:t>i</m:t></m:r></m:e>", "sup"),
+        ("noe", "<m:sub><m:r><m:t>i</m:t></m:r></m:sub><m:sup><m:r><m:t>n</m:t></m:r></m:sup>", "e"),
+    ],
+)
+def test_nary_missing_a_required_child_is_flagged(
+    tmp_path: Path, label: str, children: str, missing: str
+) -> None:
+    # CT_Nary requires m:sub, m:sup and m:e (they are present but empty when
+    # a bound is hidden), so an m:nary missing one is malformed the same way a
+    # denominator-less m:f is — and until now it passed validation silently.
+    source = make_docx_with_omml(
+        tmp_path / f"badnary_{label}.docx",
+        content=f'<w:p><m:oMath xmlns:m="{M_NS}"><m:nary>{children}</m:nary></m:oMath></w:p>',
+    )
+    report = validate_docx(source)
+    assert any(f"m:nary missing {missing}" in e["error"] for e in report["omml"]["structural_errors"])
+
+
+def test_generated_nary_passes_structure_validation(tmp_path: Path) -> None:
+    source = make_docx_with_omml(
+        tmp_path / "goodnary.docx",
+        content=f"<w:p>{omath_for('sum(i=1,n) i')}</w:p>",
+    )
+    report = validate_docx(source)
+    assert report["omml"]["structural_errors"] == []
+
+
 def test_deep_nesting_is_flagged(tmp_path: Path) -> None:
     # Build 35 nested m:f (fraction) elements — each m:f is a math-structure layer.
     # m:num / m:den are containers, not counted toward depth.

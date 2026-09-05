@@ -780,3 +780,31 @@ def test_convert_without_xsl_flag_does_not_crash(tmp_path: Path) -> None:
     code = main(["convert", str(source), "--output", str(tmp_path / "out.docx")])
     assert code in (0, 2)
     assert (tmp_path / "out.docx").is_file()
+
+
+def test_scan_grades_latex_delimiters_high_and_bare_macros_medium(tmp_path: Path) -> None:
+    document = document_with_body(
+        r"""
+        <w:p><w:r><w:t>由此可得 \(\frac{a}{b}\) 成立。</w:t></w:r></w:p>
+        <w:p><w:r><w:t>样本均值记为 \bar{x}。</w:t></w:r></w:p>
+        <w:p><w:r><w:t>文件位于 C:\Users\gml85 目录。</w:t></w:r></w:p>
+        """
+    )
+    source = make_docx(tmp_path / "source.docx", document_xml=document)
+    report = scan_docx(source, tmp_path / "report.json")
+    candidates = [c for c in report["candidates"] if c["part"] == "word/document.xml"]
+    by_source = {c["source"]: c for c in candidates}
+
+    delimited = by_source[r"\(\frac{a}{b}\)"]
+    assert delimited["confidence"] == "high"
+    assert delimited["selected"] is True
+    assert delimited["parse_status"] == "ok"
+
+    # A bare macro is real notation but the author did not mark it as math, so
+    # it lands in the review list instead of being converted unattended.
+    bare = by_source[r"\bar{x}"]
+    assert bare["confidence"] == "medium"
+    assert bare["selected"] is False
+    assert bare["parse_status"] == "ok"
+
+    assert not any("Users" in candidate["source"] for candidate in candidates)

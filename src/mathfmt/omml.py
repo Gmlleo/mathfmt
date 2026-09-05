@@ -8,6 +8,9 @@ from collections.abc import Sequence
 
 from lxml import etree
 
+from .accents import ACCENT_CHARS, ACCENT_NAMES, OMML_ACCENT_CHARS
+from .nary import NARY_NAMES, OMML_IMPLIED_NARY_CHAR
+
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 
@@ -25,12 +28,14 @@ MATHML_TAGS = {
     "mo",
     "mfrac",
     "msqrt",
+    "mroot",
     "msup",
     "msub",
     "msubsup",
     "mfenced",
     "munder",
     "mover",
+    "munderover",
     "mrow",
     "mtable",
     "mtr",
@@ -40,11 +45,25 @@ MATHML_TAGS = {
 
 RELATION_SYMBOLS = ("=", "≤", "≥", "≠", "≈", "→", "⇒", "⇌", "<", ">")
 
+# Both directions read the one shared operator table (see mathfmt.nary), so a
+# new big operator taught to the parser is understood here without a second
+# edit — previously an operator added to core's table produced an ``m:chr``
+# this module's reverse direction then refused to read.
+#
+# Forward (`_nary`): a MathML ``munderover`` only becomes an ``m:nary`` when
+# its base is an ``mo`` holding one of these characters. Gating on the
+# character — rather than merely on the tag — is what keeps ``lim(x->0)`` out
+# of the n-ary path; ``lim`` is a ``munder`` over an ``mi`` base.
+#
+# Reverse (`_emit_nary`): the same characters map back to their linear names.
+# ∫ never reaches the reverse path from MathFmt's own writer — ``int(...)``
+# with bounds builds ``m:sSubSup`` — but a Word-authored or hand-authored
+# ``m:nary`` using ∫ is a real, common shape, so it is reconstructed too.
+
 
 def mathml_to_omml_py(math_elem: etree._Element) -> etree._Element:
     omath = etree.Element(qname(M_NS, "oMath"))
-    for child in math_elem:
-        _convert(child, omath)
+    _convert_sequence(list(math_elem), omath)
     return omath
 
 
@@ -133,6 +152,67 @@ def _relation_alignment_matrix(
     return omath
 
 
+def _operator_char(elem: etree._Element) -> str:
+    """The normalized text of a MathML token element.
+
+    MathML token content is whitespace-insensitive, so pretty-printed input
+    carries newlines and indentation inside an ``<mo>``. OMML's ``m:chr`` is an
+    ``ST_Char`` — a single character — so that whitespace must not reach it;
+    writing it raw produced an ``m:chr`` this module's own reverse direction
+    then refused to read. MML2OMML.XSL passes ``normalize-space()`` into
+    ``CreateNaryProp`` for the same reason, and this collapses internal
+    whitespace runs and trims exactly as that does.
+    """
+    return " ".join((elem.text or "").split())
+
+
+def _is_nary_operator_group(elem: etree._Element) -> bool:
+    """True for a ``munderover`` that is a bounded big operator (∑, ∏, ∫).
+
+    Deliberately narrow. ``lim(x->0)`` is a ``munder`` whose base is an ``mi``
+    reading "lim"; an annotated reaction arrow is a ``mover``. Neither is an
+    n-ary object, and both must keep their ``m:limLow``/``m:limUpp`` shape with
+    the body left as a following sibling, so this checks the tag, the base
+    being an operator (``mo``), *and* the operator character.
+    """
+    if etree.QName(elem).localname != "munderover":
+        return False
+    base = elem[0] if len(elem) else None
+    if base is None or etree.QName(base).localname != "mo":
+        return False
+    return _operator_char(base) in NARY_NAMES
+
+
+def _convert_sequence(children: list[etree._Element], parent: etree._Element) -> None:
+    """Convert a run of MathML siblings, nesting an n-ary operator's operand.
+
+    In MathML the operand of a big operator is a *sibling* of the
+    ``munderover``, not a child of it — ``_nary_mathml`` (core.py) emits
+    ``<mrow><munderover>…</munderover><body/></mrow>``. In OMML the operand
+    belongs inside the ``m:nary``'s own ``m:e`` slot, which is what Word and
+    Office's MML2OMML.XSL both produce. Bridging the two needs a view of the
+    sibling list, so every place that converts a sequence of MathML children
+    goes through here rather than looping over ``_convert`` directly.
+
+    The operand is **the rest of the enclosing sequence**. ``_nary_mathml``
+    wraps the operator and its body in an ``mrow`` of exactly two children, so
+    that ``mrow`` boundary is precisely the operand's scope: in
+    ``e^x = sum(n=0,oo) x^n/n!`` only the fraction is absorbed, because the
+    ``e^x =`` prefix lives in the *outer* ``mrow``. MML2OMML.XSL reaches the
+    same answer by a different route — it takes the single
+    ``following-sibling::*[1]`` and then merges adjacent token elements into
+    one run — and the two rules coincide for every shape MathFmt emits.
+    Taking the rest of the sequence, rather than only the next sibling, is the
+    safer reading for foreign MathML: under-scoping would silently render part
+    of the operand as though it sat outside the operator.
+    """
+    for index, child in enumerate(children):
+        if _is_nary_operator_group(child):
+            _nary(child, parent, children[index + 1 :])
+            return
+        _convert(child, parent)
+
+
 def _convert(elem: etree._Element, parent: etree._Element) -> None:
     tag = etree.QName(elem).localname
 
@@ -155,6 +235,8 @@ def _convert(elem: etree._Element, parent: etree._Element) -> None:
         _fraction(elem, parent)
     elif tag == "msqrt":
         _radical(elem, parent)
+    elif tag == "mroot":
+        _radical_with_degree(elem, parent)
     elif tag == "msup":
         _script(elem, parent, "sSup", "sup")
     elif tag == "msub":
@@ -166,12 +248,19 @@ def _convert(elem: etree._Element, parent: etree._Element) -> None:
     elif tag == "munder":
         _limit(elem, parent)
     elif tag == "mover":
-        _limit_upper(elem, parent)
+        if elem.get("accent") == "true":
+            _accent(elem, parent)
+        else:
+            _limit_upper(elem, parent)
+    elif tag == "munderover":
+        if _is_nary_operator_group(elem):
+            _nary(elem, parent)
+        else:
+            _stacked_limits(elem, parent)
     elif tag == "mtable":
         _matrix(elem, parent)
     elif tag == "mrow":
-        for child in elem:
-            _convert(child, parent)
+        _convert_sequence(list(elem), parent)
 
 
 def _text_run(parent: etree._Element, text: str, *, plain: bool = False) -> None:
@@ -203,8 +292,27 @@ def _radical(elem: etree._Element, parent: etree._Element) -> None:
     deg_hide.set(qname(M_NS, "val"), "1")
     etree.SubElement(rad, qname(M_NS, "deg"))
     e = etree.SubElement(rad, qname(M_NS, "e"))
-    for child in elem:
-        _convert(child, e)
+    _convert_sequence(list(elem), e)
+
+
+def _radical_with_degree(elem: etree._Element, parent: etree._Element) -> None:
+    """Build an n-th root ``m:rad`` for MathML ``mroot`` (base, index children).
+
+    Unlike :func:`_radical`, the degree is visible: ``degHide`` is ``0`` and
+    ``m:deg`` is filled in. ``m:deg`` must be created before ``m:e`` — OMML's
+    ``CT_Rad`` fixes that child order.
+    """
+    children = list(elem)
+    if len(children) < 2:
+        raise OmmlConversionError(f"mroot requires a base and a degree, got {len(children)} child(ren)")
+    rad = etree.SubElement(parent, qname(M_NS, "rad"))
+    rad_pr = etree.SubElement(rad, qname(M_NS, "radPr"))
+    deg_hide = etree.SubElement(rad_pr, qname(M_NS, "degHide"))
+    deg_hide.set(qname(M_NS, "val"), "0")
+    deg = etree.SubElement(rad, qname(M_NS, "deg"))
+    e = etree.SubElement(rad, qname(M_NS, "e"))
+    _convert(children[0], e)
+    _convert(children[1], deg)
 
 
 def _script(
@@ -243,8 +351,7 @@ def _delimiter(elem: etree._Element, parent: etree._Element) -> None:
     end = etree.SubElement(d_pr, qname(M_NS, "endChr"))
     end.set(qname(M_NS, "val"), elem.get("close", ")"))
     e = etree.SubElement(d, qname(M_NS, "e"))
-    for child in elem:
-        _convert(child, e)
+    _convert_sequence(list(elem), e)
 
 
 def _limit(elem: etree._Element, parent: etree._Element) -> None:
@@ -267,6 +374,115 @@ def _limit_upper(elem: etree._Element, parent: etree._Element) -> None:
         _convert(elem[1], lim)
 
 
+def _stacked_limits(elem: etree._Element, parent: etree._Element) -> None:
+    """Build nested ``m:limUpp``/``m:limLow`` for a ``munderover`` that is not
+    a bounded big operator — a doubly-annotated arrow, or any base that is not
+    an n-ary operator character in an ``mo``.
+
+    OMML has no single element for "base with both an under- and an
+    over-annotation", so Word stacks the two limit templates: an ``m:limUpp``
+    whose ``m:e`` holds an ``m:limLow``. MML2OMML.XSL produces exactly this for
+    every such ``munderover``, and it is lossless.
+
+    Routing these through :func:`_nary` instead — which is what this module did
+    before — produced an ``m:nary`` whose ``m:chr`` held the base's whole text
+    (``m:val="lim"``: three characters in an attribute ``ST_Char`` defines as
+    one), with an empty ``m:e`` and the operand orphaned as a following
+    sibling.
+    """
+    children = list(elem)
+    lim_upp = etree.SubElement(parent, qname(M_NS, "limUpp"))
+    outer_e = etree.SubElement(lim_upp, qname(M_NS, "e"))
+    lim_low = etree.SubElement(outer_e, qname(M_NS, "limLow"))
+    inner_e = etree.SubElement(lim_low, qname(M_NS, "e"))
+    if children:
+        _convert(children[0], inner_e)
+    under = etree.SubElement(lim_low, qname(M_NS, "lim"))
+    if len(children) > 1:
+        _convert(children[1], under)
+    over = etree.SubElement(lim_upp, qname(M_NS, "lim"))
+    if len(children) > 2:
+        _convert(children[2], over)
+
+
+def _nary(
+    elem: etree._Element,
+    parent: etree._Element,
+    operand: Sequence[etree._Element] = (),
+) -> None:
+    """Build a native ``m:nary`` (big operator with both bounds) from a MathML
+    ``munderover``, nesting ``operand`` — the operator's MathML siblings, see
+    :func:`_convert_sequence` — inside its ``m:e``.
+
+    ``munderover`` over an n-ary operator is the only shape ``_nary_mathml``
+    (core.py) produces for a bounded ``sum``/``prod``, always as ``(operator,
+    under-bound, over-bound)``. (With a single bound it emits a bare ``mo``
+    instead, so there is no ``munder``/``mover`` big-operator case to handle,
+    and ``int(...)`` uses ``msubsup`` — reaching ``m:sSubSup`` — throughout.)
+
+    This is what Word itself writes for ``∑_{i=1}^{n} i``: ``m:nary`` with
+    ``m:naryPr``, ``m:sub``, ``m:sup``, and the operand inside ``m:e``. Leaving
+    ``m:e`` empty and letting the operand fall out as a following sibling is
+    schema-valid and renders in the right visual order, but Word's equation
+    editor then shows an empty operand placeholder with the body sitting
+    outside the template. ``m:limLow``/``m:limUpp`` nested together is not an
+    alternative: that is Word's shape for a *stacked* under/over annotation,
+    not a big-operator template, and has no room for the operator's own glyph
+    alongside its bounds.
+    """
+    children = list(elem)
+    if len(children) < 3:
+        raise OmmlConversionError(
+            f"munderover requires a base, an under bound, and an over bound, got {len(children)} child(ren)"
+        )
+    nary = etree.SubElement(parent, qname(M_NS, "nary"))
+    nary_pr = etree.SubElement(nary, qname(M_NS, "naryPr"))
+    chr_el = etree.SubElement(nary_pr, qname(M_NS, "chr"))
+    chr_el.set(qname(M_NS, "val"), _operator_char(children[0]))
+    lim_loc = etree.SubElement(nary_pr, qname(M_NS, "limLoc"))
+    lim_loc.set(qname(M_NS, "val"), "undOvr")
+    # Without m:grow Word will not stretch the operator glyph to a tall
+    # operand, so "sum(i=1,n) (a+b)/c" renders a small ∑ beside a full-height
+    # fraction. MML2OMML.XSL writes grow="1" for every character in its
+    # big-operator list, which contains all of NARY_NAMES, so this is
+    # unconditional. "1"/"0" is both Office's spelling here and this file's own
+    # ST_OnOff convention (compare _radical's degHide) — unlike subHide/supHide
+    # just below, where Office writes "off"/"on" and this file deliberately
+    # keeps the equivalent "0"/"1".
+    grow = etree.SubElement(nary_pr, qname(M_NS, "grow"))
+    grow.set(qname(M_NS, "val"), "1")
+    sub_hide = etree.SubElement(nary_pr, qname(M_NS, "subHide"))
+    sub_hide.set(qname(M_NS, "val"), "0")
+    sup_hide = etree.SubElement(nary_pr, qname(M_NS, "supHide"))
+    sup_hide.set(qname(M_NS, "val"), "0")
+    sub = etree.SubElement(nary, qname(M_NS, "sub"))
+    _convert(children[1], sub)
+    sup = etree.SubElement(nary, qname(M_NS, "sup"))
+    _convert(children[2], sup)
+    # m:e stays present even with no operand — CT_Nary requires it, and Word
+    # writes an empty one for a bare "∑_{i=1}^{n}".
+    e = etree.SubElement(nary, qname(M_NS, "e"))
+    _convert_sequence(list(operand), e)
+
+
+def _accent(elem: etree._Element, parent: etree._Element) -> None:
+    children = list(elem)
+    if len(children) < 2:
+        raise OmmlConversionError(
+            f"accented mover requires a base and an accent character, got {len(children)} child(ren)"
+        )
+    mathml_char = (children[1].text or "").strip()
+    char = OMML_ACCENT_CHARS.get(mathml_char)
+    if char is None:
+        raise OmmlConversionError(f"unsupported MathML accent character {mathml_char!r}")
+    acc = etree.SubElement(parent, qname(M_NS, "acc"))
+    acc_pr = etree.SubElement(acc, qname(M_NS, "accPr"))
+    chr_el = etree.SubElement(acc_pr, qname(M_NS, "chr"))
+    chr_el.set(qname(M_NS, "val"), char)
+    e = etree.SubElement(acc, qname(M_NS, "e"))
+    _convert(children[0], e)
+
+
 def _matrix(elem: etree._Element, parent: etree._Element) -> None:
     m = etree.SubElement(parent, qname(M_NS, "m"))
     etree.SubElement(m, qname(M_NS, "mPr"))
@@ -276,15 +492,15 @@ def _matrix(elem: etree._Element, parent: etree._Element) -> None:
             mr = etree.SubElement(m, qname(M_NS, "mr"))
             for td in child:
                 e = etree.SubElement(mr, qname(M_NS, "e"))
-                for cell_child in td:
-                    _convert(cell_child, e)
+                _convert_sequence(list(td), e)
 
 
 # -- Reverse direction: OMML -> MathFmt linear text -------------------------
 
 
 class OmmlConversionError(ValueError):
-    """Raised when an ``m:oMath`` element uses a construct ``omml_to_text`` cannot reverse."""
+    """Raised when a MathML/OMML construct cannot be converted in the requested direction —
+    forward (unsupported accent character) or reverse (``omml_to_text`` cannot reverse it)."""
 
 
 _REVERSE_OPERATORS = {
@@ -306,14 +522,22 @@ def omml_to_text(omath_elem: etree._Element) -> str:
     linear formula syntax — the reverse of :func:`mathml_to_omml_py`.
 
     Supports the constructs MathFmt's own OMML output uses: text runs, fractions
-    (including derivative and partial-derivative fractions), radicals,
+    (including derivative and partial-derivative fractions), radicals (both
+    ``sqrt(...)`` and, via a visible ``m:deg``, the n-th root ``root(base,n)``),
     super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket,
-    vectors), and limits / annotated reaction arrows. Constructs this converter
-    does not reverse — matrices, piecewise/cases tables, **MathFmt's own
+    vectors), limits / annotated reaction arrows, accents (``m:acc``,
+    including a base of its own accent for a nested ``accent(accent(x,bar),vec)``),
+    and bounded n-ary big operators (``m:nary``, e.g. ``sum(i=1,n) i`` /
+    ``prod(k=1,m) k``) — an ``m:nary`` missing one of its two bounds, or
+    naming an operator character this converter doesn't recognize, still
+    raises :class:`OmmlConversionError` rather than guessing. An ``m:nary``
+    that omits ``m:naryPr``/``m:chr`` altogether is read as the summation the
+    format documents as that element's default, not rejected.
+    Constructs this converter does not reverse — matrices, piecewise/cases tables, and **MathFmt's own
     multi-line/aligned equation output** (also built from a native OMML matrix
-    or ``m:eqArr``, despite not being a mathematical matrix), and n-ary
-    operators — raise :class:`OmmlConversionError` naming the unsupported
-    element instead of guessing at a wrong answer.
+    or ``m:eqArr``, despite not being a mathematical matrix) — raise
+    :class:`OmmlConversionError` naming the unsupported element instead of
+    guessing at a wrong answer.
 
     The result re-parses (via :func:`formula_to_mathml <mathfmt.core.formula_to_mathml>`)
     to an equivalent formula, not necessarily byte-identical input text — for
@@ -419,10 +643,7 @@ def _emit(elem: etree._Element) -> str:
     if tag == "f":
         return _emit_fraction(elem)
     if tag == "rad":
-        deg = _find(elem, "deg")
-        if deg is not None and len(deg) > 0:
-            raise OmmlConversionError("omml_to_text does not support nth-root radicals")
-        return "sqrt(" + _emit_children(_require(elem, "e")) + ")"
+        return _emit_radical(elem)
     if tag == "sSup":
         return _emit_operand(_find(elem, "e")) + "^" + _emit_operand(_find(elem, "sup"))
     if tag == "sSub":
@@ -440,6 +661,10 @@ def _emit(elem: etree._Element) -> str:
         return beg + _emit_children(_require(elem, "e")) + end
     if tag in {"limLow", "limUpp"}:
         return _emit_limit(elem)
+    if tag == "acc":
+        return _emit_accent(elem)
+    if tag == "nary":
+        return _emit_nary(elem)
     raise OmmlConversionError(f"omml_to_text does not support m:{tag} elements")
 
 
@@ -501,6 +726,22 @@ def _strip_partial_symbol(container: etree._Element | None) -> str | None:
     if etree.QName(first).localname != "r" or _run_text(first) != _PARTIAL_SYMBOL:
         return None
     return _join_emitted(list(container)[1:])
+
+
+def _emit_radical(elem: etree._Element) -> str:
+    """Reconstruct ``m:rad`` as ``sqrt(base)`` or, for a visible degree,
+    ``root(base,degree)``.
+
+    Word writes ``m:deg`` for a square root too (with ``degHide`` set), but
+    empty — that is what distinguishes an ordinary square root from an n-th
+    root here: an absent or empty ``m:deg`` means ``sqrt``, a non-empty one
+    means ``root``.
+    """
+    base_text = _emit_children(_require(elem, "e"))
+    deg = _find(elem, "deg")
+    if deg is not None and len(deg) > 0:
+        return f"root({base_text},{_emit_children(deg)})"
+    return f"sqrt({base_text})"
 
 
 def _emit_subscript(elem: etree._Element) -> str:
@@ -588,6 +829,77 @@ def _emit_limit(elem: etree._Element) -> str:
         f"omml_to_text only supports m:limLow/m:limUpp for 'lim(...)' or an annotated "
         f"reaction arrow, got base {base!r}"
     )
+
+
+# The character an omitted m:naryPr/m:chr implies lives with the operator table
+# (see mathfmt.nary): it is a fact about the format, not about this reader, and
+# it is deliberately a different character from the writer's unknown-name
+# fallback — keeping both under one name in two modules read as a contradiction.
+#
+# In practice this branch serves third-party or hand-authored OMML: MathFmt's
+# own writer and Office's MML2OMML.XSL both always write m:chr explicitly
+# (MML2OMML's CreateNaryProp emits an unconditional <m:chr>), even for a plain
+# summation.
+
+
+def _emit_nary(elem: etree._Element) -> str:
+    """Reconstruct ``m:nary`` as ``name(sub,sup)`` followed by its operand.
+
+    Requires both ``m:sub`` and ``m:sup`` to be present and non-empty — a
+    single-bound or bound-less ``m:nary`` has no ``sum(a,b)``-shaped linear
+    form, so it raises rather than guessing at a missing bound.
+
+    The operand normally lives inside ``m:e`` — that is what Word writes, and
+    what MathFmt's own :func:`_nary` writes too — and is emitted from there.
+    An ``m:nary`` whose ``m:e`` is empty is still legal (Word writes one for a
+    bare ``∑_{i=1}^{n}``); anything following it in the OMML is picked up by
+    the normal sibling-concatenation loop in ``_join_emitted`` once this
+    function returns, so the reconstructed text is the same either way.
+    """
+    nary_pr = _find(elem, "naryPr")
+    chr_el = _find(nary_pr, "chr") if nary_pr is not None else None
+    # A present m:chr with no m:val is a different, narrower case: ISO/IEC
+    # 29500 treats that as the character being absent, not "use the default"
+    # (the default applies only when m:chr/m:naryPr is missing outright), so it
+    # falls through to the "unsupported operator" raise below rather than
+    # silently becoming a summation. This mirrors _emit_accent exactly.
+    char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else OMML_IMPLIED_NARY_CHAR
+    name = NARY_NAMES.get(char or "")
+    if name is None:
+        raise OmmlConversionError(f"omml_to_text does not support the m:nary operator {char!r}")
+    sub, sup = _find(elem, "sub"), _find(elem, "sup")
+    if sub is None or len(sub) == 0 or sup is None or len(sup) == 0:
+        raise OmmlConversionError(
+            f"omml_to_text requires both m:sub and m:sup to reconstruct m:nary as {name}(...)"
+        )
+    e = _find(elem, "e")
+    operand = _emit_children(e) if e is not None else ""
+    return f"{name}({_emit_children(sub)},{_emit_children(sup)})" + operand
+
+
+# ISO/IEC 29500's CT_AccPr defines U+0302 COMBINING CIRCUMFLEX ACCENT (hat) as
+# the accent's value when m:accPr — or its m:chr child — is omitted entirely;
+# m:accPr is itself minOccurs="0" in CT_Acc. That is the format's own
+# documented default, not this converter guessing, so an absent property is
+# honored rather than rejected. In practice this branch serves third-party or
+# hand-authored OMML: MathFmt's own writer and Office's MML2OMML.XSL both
+# always write m:chr explicitly, even for hat.
+_DEFAULT_ACCENT_CHAR = OMML_ACCENT_CHARS[ACCENT_CHARS["hat"]]
+
+
+def _emit_accent(elem: etree._Element) -> str:
+    acc_pr = _find(elem, "accPr")
+    chr_el = _find(acc_pr, "chr") if acc_pr is not None else None
+    # A present m:chr with no m:val is a different, narrower case: ISO/IEC
+    # 29500 treats that as the character being absent, not "use the default"
+    # (the default applies only when m:chr/m:accPr is missing outright), so
+    # it falls through to the same "unsupported character" raise below rather
+    # than silently becoming hat.
+    char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else _DEFAULT_ACCENT_CHAR
+    name = ACCENT_NAMES.get(char or "")
+    if name is None:
+        raise OmmlConversionError(f"omml_to_text does not support the accent character {char!r}")
+    return f"accent({_emit_children(_require(elem, 'e'))},{name})"
 
 
 def _reverse_operators(text: str) -> str:

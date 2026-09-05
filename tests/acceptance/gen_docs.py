@@ -181,6 +181,26 @@ def doc06_v040() -> Path:
     )
 
 
+def doc07_latex() -> Path:
+    """v1.3 notation: LaTeX delimiters, bare macros, accents, and environments."""
+    return _write(
+        "doc07_latex.docx",
+        [
+            "MathFmt v1.3 LaTeX Acceptance",
+            "",
+            r"由此可得 \(\frac{a}{b}\) 成立。",
+            r"体积公式为 \[ V = \sqrt[3]{x} \]",
+            r"样本均值记为 \bar{x}。",
+            r"求和式 \sum_{i=1}^{n} i 收敛。",
+            # Wrapped in $…$ because the row separator is only meaningful once
+            # the environment around it is gone: as an explicit span this stays
+            # one candidate and exercises the delimiter path as well.
+            r"$\begin{cases} 0 & x<0 \\ 1 & x \geq 0 \end{cases}$",
+            r"文件位于 C:\Users\gml85 目录，不应被识别。",
+        ],
+    )
+
+
 def all_docs() -> list[Path]:
     OUT.mkdir(parents=True, exist_ok=True)
     return [
@@ -190,6 +210,7 @@ def all_docs() -> list[Path]:
         doc04_edge_cases(),
         doc05_textbook(),
         doc06_v040(),
+        doc07_latex(),
     ]
 
 

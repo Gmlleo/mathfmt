@@ -120,11 +120,12 @@ MathFmt 1.0 also supports trusted custom formula recognizers through repeatable
 
 ## Status
 
-**Stable (v1.2.0).** Feature-complete cross-platform OMML conversion with a stable
+**Stable (v1.3.0).** Feature-complete cross-platform OMML conversion with a stable
 Python API, deterministic custom recognizers, structured safety reports, batch
 processing, WPS/LibreOffice compatibility checks, a 100-page performance gate, and
 an optional local drag-and-drop GUI (`mathfmt gui`) with a candidate review step
 and a reverse OMML → text converter for tooling built on top of MathFmt.
+Since v1.3.0 a formula may also be written in a documented subset of LaTeX.
 
 ---
 
@@ -150,6 +151,8 @@ MathFmt 将 DOCX 中的普通文本公式排版为 Word 原生 OMML 公式。
 | `x, y, z` | 逗号分隔序列 |
 | `H2O` | 直立元素符号与原生下标 H₂O |
 | `2H2 + O2 -> 2H2O` | 化学反应式与原生箭头 |
+| `root(x,3)` / `accent(x,bar)` / `"kg"` | 立方根 / 顶标 x̄ / 直立文本 |
+| LaTeX 子集：`\(\frac{a}{b}\)`、`\sqrt[3]{x}`、`\sum_{i=1}^{n} i` | 与对应的原生公式相同 |
 
 ### 兼容性
 
@@ -214,6 +217,7 @@ pip install --upgrade mathfmt
 | **1.0.0** (2026-08-08) | 稳定 API 与 SemVer；插件钩子；100 页性能门禁；Python 3.14 |
 | **1.1.0** (2026-08-31) | `mathfmt gui`：本地浏览器拖拽界面，无需终端命令 |
 | **1.2.0** (2026-09-03) | `mathfmt gui` 转换前逐条审核公式；解析错误附带提示；`omml_to_text` 反向转换；可选独立 exe 打包 |
+| **1.3.0** (2026-09-05) | LaTeX 输入子集；`root`/`accent`/引号直立文本三个新构造；LaTeX 分隔符与裸宏扫描 |
 
 ### 更多文档
 
@@ -259,6 +263,8 @@ MathFmt converts plain-text formulas in DOCX files into native Word OMML equatio
 | `∂f/∂x` | Stacked partial-derivative fraction |
 | `T_i^j` | Combined tensor subscript and superscript |
 | `<phi\|psi>` | Native angle-delimited bra-ket `⟨phi\|psi⟩` |
+| `root(x,3)` / `accent(x,bar)` / `"kg"` | Cube root / overbar x̄ / upright text |
+| LaTeX subset: `\(\frac{a}{b}\)`, `\sqrt[3]{x}`, `\sum_{i=1}^{n} i` | The same native equations |
 
 ### Compatibility
 
@@ -323,6 +329,7 @@ pip install --upgrade mathfmt
 | **1.0.0** (2026-08-08) | Stable API and SemVer, plugin hooks, 100-page performance gate, Python 3.14 |
 | **1.1.0** (2026-08-31) | `mathfmt gui`: a local browser drag-and-drop interface, no terminal commands needed |
 | **1.2.0** (2026-09-03) | `mathfmt gui` per-candidate review before converting; plain-language parse-error hints; `omml_to_text` reverse conversion; optional standalone exe packaging |
+| **1.3.0** (2026-09-05) | LaTeX input subset; the `root`, `accent`, and quoted-text constructs; LaTeX delimiter and bare-macro scanning |
 
 ### Further Reading
 

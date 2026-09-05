@@ -42,6 +42,8 @@ def test_load_alias_profile_returns_stable_metadata(tmp_path: Path) -> None:
         ({"name": "", "aliases": {"ohm": "Ω"}}, "name"),
         ({"aliases": {"bad-token": "Ω"}}, "ASCII letter"),
         ({"aliases": {"sqrt": "√"}}, "reserved"),
+        ({"aliases": {"accent": "‾"}}, "reserved"),
+        ({"aliases": {"root": "√"}}, "reserved"),
         ({"aliases": {"if": "⇒"}}, "reserved"),
         ({"aliases": {"pPAIR": "ℙ"}}, "reserved"),
         ({"aliases": {"DERV0": "∂"}}, "reserved"),

@@ -183,7 +183,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true", help="do not write output if any selected formula fails"
     )
     apply.add_argument(
-        "--xsl", type=Path, help="path to MML2OMML.XSL (optional; built-in Python backend used otherwise)"
+        "--xsl",
+        type=Path,
+        help=(
+            "path to MML2OMML.XSL (optional; Office's XSL is auto-detected and preferred "
+            "on a machine that has it, otherwise the built-in Python backend is used)"
+        ),
     )
 
     convert = subparsers.add_parser("convert", help="conservatively convert detected formulas in one step")
@@ -222,7 +227,12 @@ def build_parser() -> argparse.ArgumentParser:
     gui.add_argument("--port", type=int, default=0, help="port to bind (default: 0, pick a free port)")
     gui.add_argument("--no-browser", action="store_true", help="do not automatically open a browser tab")
     gui.add_argument(
-        "--xsl", type=Path, help="path to MML2OMML.XSL (optional; built-in Python backend used otherwise)"
+        "--xsl",
+        type=Path,
+        help=(
+            "path to MML2OMML.XSL (optional; Office's XSL is auto-detected and preferred "
+            "on a machine that has it, otherwise the built-in Python backend is used)"
+        ),
     )
 
     doctor = subparsers.add_parser("doctor", help="check the local MathFmt environment")

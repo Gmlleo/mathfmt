@@ -14,8 +14,10 @@ from pathlib import Path
 from lxml import etree
 
 from ._version import __version__
+from .accents import ACCENT_CHARS
 from .aliases import AliasProfile, alias_profile_metadata, validate_review_alias_profile
 from .docxio import inspect_docx, parse_xml_part, write_docx
+from .nary import FALLBACK_NARY_CHAR, NARY_CHARS, NARY_NAMES
 from .omml import combine_equation_array, mathml_to_omml_py
 from .plugins import (
     FormulaCandidate,
@@ -363,21 +365,42 @@ def _suggest_fix(expected: str | None) -> str | None:
         )
     if expected == "]] or ,":
         return "Separate matrix entries with ',' and rows with ';', closing the matrix with ']]'."
+    if expected == "accent kind":
+        return f"An accent must be one of: {', '.join(ACCENT_CHARS)} — e.g. accent(x,bar)."
     if expected == "number, identifier, function, matrix, or grouped expression":
         return "An operand is missing here — check for a stray operator or an empty group."
     if expected == "number, identifier, operator, or grouping symbol":
         return "This character isn't recognized — check for a typo or an unsupported symbol."
+    # Raised by latex.py, whose errors carry a column into the *expanded* text
+    # rather than the original LaTeX, so the macro name in the message is the
+    # reliable locator and the hint points at the list rather than the column.
+    if expected == "a supported LaTeX macro":
+        return (
+            "This LaTeX macro is outside MathFmt's supported subset — "
+            "see docs/formula-syntax.md section 10 for the full list."
+        )
     return None
 
 
+# ∇ and ∓ are tokenizable but deliberately absent from MATH_CHARS: they parse
+# when they reach a formula (via a LaTeX macro or an explicit $…$ span) but are
+# never picked up by generic candidate discovery. ∂ is the reverse — it IS in
+# MATH_CHARS, so making it tokenizable on its own would turn today's reviewable
+# parse error for shapes like ∂^2u/∂x^2 into a silently wrong conversion. Bare ∂
+# therefore stays untokenizable; ∂f/∂x is handled earlier, by preprocess_formula.
 TOKEN_RE = re.compile(
     r"\s*(?:"
     r"(?P<MATRIX_OPEN>\[\[)|"
     r"(?P<MATRIX_CLOSE>\]\])|"
-    r"(?P<NUMBER>\d+(?:[\.,]\d+)?)|"
+    # A quoted run is opaque: everything up to the closing quote is text, not
+    # math, so it is matched ahead of NUMBER and IDENT and never split. A lone
+    # opening quote matches nothing here and still raises, rather than lexing
+    # as some other token.
+    r"(?P<STRING>\"[^\"]*\")|"
+    r"(?P<NUMBER>\d+(?:\.\d+)?)|"
     r"(?P<IF>if\b)|"
-    r"(?P<IDENT>sqrt|lim|exp|sin|cos|tan|Delta|pi|inf|e[pv]|pPAIR|DERV\d+|[A-Za-z][A-Za-z0-9]*|[Α-Ωα-ω∞∫∑∏ℝℂℕℤℚℙℍℓ])|"
-    r"(?P<OP><->|<=|>=|!=|<<|>>|~=|->|=>|\+/-|[+\-*/^=<>!±≠≤≥≈≅→⇒⇌·×÷_∈∉⊂⊆⊃⊇∪∩∧∨⊕⊗∝≡])|"
+    r"(?P<IDENT>sqrt|lim|exp|sin|cos|tan|Delta|pi|inf|e[pv]|pPAIR|DERV\d+|[A-Za-z][A-Za-z0-9]*|[Α-Ωα-ω∞∫∑∏ℝℂℕℤℚℙℍℓ∇])|"
+    r"(?P<OP><->|<=|>=|!=|<<|>>|~=|->|=>|\+/-|[+\-*/^=<>!±∓≠≤≥≈≅→⇒⇌·×÷_∈∉⊂⊆⊃⊇∪∩∧∨⊕⊗∝≡])|"
     r"(?P<LPAREN>[\(\[\{])|(?P<RPAREN>[\)\]\}])|(?P<COMMA>,)|(?P<SEMI>;)|"
     r"(?P<ELLIPSIS>…)"
     r")"
@@ -609,6 +632,7 @@ class Parser:
             "+",
             "-",
             "±",
+            "∓",
             "∪",
             "∩",
             "∧",
@@ -620,7 +644,7 @@ class Parser:
         return node
 
     def starts_atom(self) -> bool:
-        return self.current.kind in {"NUMBER", "IDENT", "LPAREN", "MATRIX_OPEN"}
+        return self.current.kind in {"NUMBER", "IDENT", "LPAREN", "MATRIX_OPEN", "STRING"}
 
     def parse_mul(self) -> Node:
         node = self.parse_power()
@@ -662,7 +686,7 @@ class Parser:
         return node
 
     def parse_unary(self) -> Node:
-        if self.current.kind == "OP" and self.current.value in {"+", "-"}:
+        if self.current.kind == "OP" and self.current.value in {"+", "-", "±", "∓"}:
             return Node("unary", self.advance().value, (self.parse_unary(),))
         return self.parse_atom()
 
@@ -688,11 +712,10 @@ class Parser:
     def _parse_nary(self, name: str) -> Node:
         return Node("nary", name)
 
-    def _parse_physics_function(self, name: str, token: Token) -> Node:
+    def _parse_call_arguments(self, name: str, token: Token, expected_count: int) -> tuple[Node, ...]:
         group = self.parse_group()
         inner = group.children[0]
         arguments = inner.children if inner.kind == "sequence" else (inner,)
-        expected_count = 2 if name in {"partial", "braket"} else 1
         if len(arguments) != expected_count:
             raise FormulaError(
                 f"{name} requires {expected_count} argument{'s' if expected_count != 1 else ''}",
@@ -701,8 +724,39 @@ class Parser:
                 found=str(len(arguments)),
                 source=self.source,
             )
+        return tuple(arguments)
+
+    def _parse_physics_function(self, name: str, token: Token) -> Node:
+        expected_count = 2 if name in {"partial", "braket"} else 1
+        arguments = self._parse_call_arguments(name, token, expected_count)
         kind = "partial_derivative" if name == "partial" else name
-        return Node(kind, children=tuple(arguments))
+        return Node(kind, children=arguments)
+
+    def _parse_accent(self, token: Token) -> Node:
+        arguments = self._parse_call_arguments("accent", token, 2)
+        kind_node = arguments[1]
+        if kind_node.kind == "identifier":
+            kind = kind_node.value
+        elif kind_node.kind == "alias":
+            # An alias must not shadow an accent kind: latex.py generates
+            # accent(x,hat) internally, so a user profile defining "hat" would
+            # otherwise break \hat{x} with an error mentioning neither.
+            kind = (kind_node.meta or {}).get("name")
+        else:
+            kind = None
+        if kind not in ACCENT_CHARS:
+            raise FormulaError(
+                f"Unknown accent kind: {kind_node.value or kind_node.kind}",
+                position=token.start,
+                expected="accent kind",
+                found=str(kind_node.value or kind_node.kind),
+                source=self.source,
+            )
+        return Node("accent", kind, (arguments[0],))
+
+    def _parse_root(self, token: Token) -> Node:
+        arguments = self._parse_call_arguments("root", token, 2)
+        return Node("root", children=arguments)
 
     def _parse_cases(self) -> Node:
         opener = self.expect("LPAREN")
@@ -773,6 +827,8 @@ class Parser:
             return self._parse_matrix()
         if token := self.accept("NUMBER"):
             return Node("number", token.value)
+        if token := self.accept("STRING"):
+            return Node("text", token.value[1:-1])
         if token := self.accept("ELLIPSIS"):
             return Node("identifier", "…")
         if self.current.kind == "LPAREN":
@@ -787,10 +843,10 @@ class Parser:
                     meta={"order": str(order)},
                 )
             if name in self.aliases:
-                return Node("alias", self.aliases[name])
-            if name in {"∫", "∏", "∑"}:
+                return Node("alias", self.aliases[name], meta={"name": name})
+            if name in NARY_NAMES:
                 return self._parse_nary(name)
-            if name in {"int", "sum", "prod"}:
+            if name in NARY_CHARS:
                 if self.current.kind == "LPAREN":
                     bounds = self.parse_group()
                     body = self.parse_add()
@@ -800,12 +856,34 @@ class Parser:
                 return self._parse_cases()
             if name in {"partial", "bra", "ket", "braket"} and self.current.kind == "LPAREN":
                 return self._parse_physics_function(name, token)
+            if name == "accent" and self.current.kind == "LPAREN":
+                return self._parse_accent(token)
+            if name == "root" and self.current.kind == "LPAREN":
+                return self._parse_root(token)
             if self.current.kind == "LPAREN":
                 group = self.parse_group()
                 if name in {"sqrt", "√"}:
                     return Node("sqrt", children=group.children)
                 if name == "lim":
                     return Node("limit", children=group.children)
+                if group.kind == "vector":
+                    # parse_group() returns a bare "vector" node (its
+                    # comma-separated elements unwrapped directly into
+                    # children) for a [a,b,...] group, unlike "(" and "{",
+                    # which always wrap their content in one "group" child.
+                    # Treating group.children as a call's argument list here
+                    # would silently drop every element after the first --
+                    # fall back to implicit multiplication instead, i.e. treat
+                    # this identifier and the bracketed group as adjacent
+                    # factors. This is not necessarily what parse_mul would
+                    # have produced had this atom not consumed the bracket:
+                    # parse_power/parse_subsup sit above parse_atom, so a
+                    # postfix operator right after the bracket binds
+                    # differently here (e.g. "f [a,b]^2" puts the exponent on
+                    # the whole product, whereas "f y^2" puts it on "y"
+                    # alone). This also keeps the brackets square instead of
+                    # forcing them to "()".
+                    return Node("binary", "implicit", (Node("identifier", name), group))
                 return Node("function", name, group.children)
             return Node("identifier", name)
         raise FormulaError(
@@ -907,6 +985,8 @@ def _script_mathml(node: Node) -> etree._Element:
 def node_to_mathml(node: Node) -> etree._Element:
     if node.kind == "number":
         return mml("mn", node.value or "")
+    if node.kind == "text":
+        return mml("mtext", node.value or "")
     if node.kind == "identifier":
         return identifier_mathml(node.value or "")
     if node.kind == "alias":
@@ -934,6 +1014,16 @@ def node_to_mathml(node: Node) -> etree._Element:
         root = mml("msqrt")
         root.append(node_to_mathml(node.children[0]))
         return root
+    if node.kind == "root":
+        mroot = mml("mroot")
+        mroot.append(node_to_mathml(node.children[0]))
+        mroot.append(node_to_mathml(node.children[1]))
+        return mroot
+    if node.kind == "accent":
+        over = mml("mover", accent="true")
+        over.append(node_to_mathml(node.children[0]))
+        over.append(mml("mo", ACCENT_CHARS[node.value or "bar"]))
+        return over
     if node.kind == "function":
         return mrow(identifier_mathml(node.value or ""), fenced(node_to_mathml(node.children[0]), "()"))
     if node.kind == "limit":
@@ -1025,8 +1115,11 @@ def node_to_mathml(node: Node) -> etree._Element:
 def _nary_mathml(node: Node) -> etree._Element:
     """Generate MathML for n-ary operators: int/sum/prod."""
     name = node.value or "int"
-    op_map = {"int": "∫", "sum": "∑", "prod": "∏", "∫": "∫", "∑": "∑", "∏": "∏"}
-    op_char = op_map.get(name, "∫")
+    # `name` is either a linear name ("sum") or the operator character itself
+    # (the bare-Unicode spelling the parser also accepts); both resolve through
+    # the one shared table, and anything unrecognized keeps the historical
+    # integral default.
+    op_char = NARY_CHARS.get(name, name if name in NARY_NAMES else FALLBACK_NARY_CHAR)
 
     # Backward compatibility: bare Unicode nary (∫ / ∑ / ∏) without children
     if not node.children:
@@ -1354,6 +1447,7 @@ def formula_to_mathml(
     source: str,
     aliases: Mapping[str, str] | None = None,
 ) -> etree._Element:
+    source = _expanded_latex(source)
     if not (aliases and source.strip() in aliases):
         chemistry = _try_chemistry_mathml(source)
         if chemistry is not None:
@@ -1365,8 +1459,43 @@ def formula_to_mathml(
     return root
 
 
+def _expanded_latex(source: str, *, allow_row_breaks: bool = False) -> str:
+    """``source`` with its LaTeX macros expanded, or unchanged if it has none.
+
+    The import is function-local: ``latex`` imports this module for its error
+    type, so a module-scope import here would close the cycle.
+
+    Expansion happens at both of the module's two entry points for formula
+    text — here for the whole formula, and in
+    :func:`split_multiline_formula` for text that may still be several rows —
+    so that everything downstream of either only ever sees linear syntax.
+
+    The gate is ``looks_like_latex``, not ``contains_latex_macro``: this text
+    is a formula somebody already chose to convert, so an *unsupported* macro
+    should be named as one rather than reaching the tokenizer and being
+    reported as an unrecognized backslash. Discovery uses the narrower question
+    (see :func:`_latex_macro_spans`), where offering a candidate that can never
+    convert would be the worse error.
+    """
+    from .latex import expand_latex, looks_like_latex
+
+    if not looks_like_latex(source):
+        return source
+    return expand_latex(source, allow_row_breaks=allow_row_breaks)
+
+
 def split_multiline_formula(source: str) -> list[str]:
-    """Split reviewed formula text on LaTeX ``\\\\`` or real line breaks."""
+    """Split reviewed formula text on LaTeX ``\\\\`` or real line breaks.
+
+    LaTeX is expanded before the split, not after: an ``aligned`` environment's
+    rows are only separators once the environment around them is gone, and
+    splitting first would hand each half an unbalanced ``\\begin``/``\\end``.
+
+    ``\\\\`` is this function's own documented separator, so the expander is
+    told not to refuse one: a reviewed multi-line formula whose rows contain
+    macros is a legitimate shape here even though it is not one in LaTeX.
+    """
+    source = _expanded_latex(source, allow_row_breaks=True)
     lines = re.split(r"\\\\|\r\n?|\n", source)
     if len(lines) == 1:
         return [source]
@@ -1466,6 +1595,32 @@ def _latex_delimited_spans(text: str) -> list[CandidateSpan]:
     index = 0
 
     while index < len(text):
+        # \[…\] and \(…\) are LaTeX's own delimiters and carry the same weight
+        # as $…$: the author marked the span as math, so it is explicit (and
+        # therefore high confidence) and its contents are the parser-ready
+        # text. The two differ only in whether the span is display or inline.
+        opened = next(
+            (
+                pair
+                for pair in (("\\[", "\\]", True), ("\\(", "\\)", False))
+                if text.startswith(pair[0], index)
+            ),
+            None,
+        )
+        if opened is not None:
+            _, closer, display = opened
+            end = text.find(closer, index + 2)
+            if end == -1:
+                index += 2
+                continue
+            span_end = end + 2
+            inner = text[index + 2 : end].strip()
+            if inner:
+                spans.append(CandidateSpan(index, span_end, text[index:span_end], inner, display, True))
+                claimed.append((index, span_end))
+            index = span_end
+            continue
+
         if text.startswith("$$", index):
             end = text.find("$$", index + 2)
             if end == -1:
@@ -1567,6 +1722,66 @@ def _physics_spans(text: str, claimed: Sequence[tuple[int, int]]) -> list[Candid
     return spans
 
 
+# A macro followed by the run of characters a formula may be written in. The
+# class is what stops the span at surrounding prose: CJK text, the sentence
+# punctuation around it, and `$` are all outside it, so `\frac{a}{b} 是比值`
+# reaches only as far as the closing brace. Tabs and spaces are included
+# because a formula contains them; a newline is not, so a span never crosses
+# two lines of a paragraph.
+LATEX_MACRO_SPAN_RE = re.compile(r"\\[A-Za-z]+\*?[A-Za-z0-9\\{}\[\]()_^+\-*/=<>,.'!|&; \t]*")
+
+
+def _longest_parseable_prefix(candidate: str) -> str:
+    """The longest prefix of ``candidate``, cut at a space, that parses.
+
+    The span pattern is deliberately permissive at its right edge, so the
+    operand of ``\\sum_{i=1}^{n} i`` is picked up but so is whatever ASCII
+    follows a formula in the same sentence. Shrinking a token at a time and
+    keeping the first prefix that parses is what settles the boundary; a
+    candidate none of whose prefixes parse yields no span at all.
+    """
+    text = candidate.rstrip().rstrip(TRIM_PUNCT)
+    while text:
+        try:
+            formula_to_mathml(text)
+        except FormulaError:
+            cut = text.rfind(" ")
+            if cut == -1:
+                return ""
+            text = text[:cut].rstrip().rstrip(TRIM_PUNCT)
+            continue
+        return text
+    return ""
+
+
+def _latex_macro_spans(text: str, claimed: Sequence[tuple[int, int]]) -> list[CandidateSpan]:
+    """Find undelimited LaTeX spans — medium confidence, never auto-selected.
+
+    Two guards, both necessary. The span must contain a macro this project
+    knows, which is what keeps a Windows path (``C:\\Users\\gml85``: several
+    backslash-letter sequences, no macros) from becoming a candidate. And some
+    prefix of it must actually parse, so an unsupported macro is not offered
+    for review as though it could convert.
+    """
+    from .latex import contains_latex_macro
+
+    spans: list[CandidateSpan] = []
+    occupied = list(claimed)
+    for match in LATEX_MACRO_SPAN_RE.finditer(text):
+        if not contains_latex_macro(match.group()):
+            continue
+        source = _longest_parseable_prefix(match.group())
+        if not source:
+            continue
+        start = match.start()
+        end = start + len(source)
+        if _range_overlaps(start, end, occupied):
+            continue
+        spans.append(CandidateSpan(start, end, source))
+        occupied.append((start, end))
+    return spans
+
+
 def _physics_kind(source: str) -> str | None:
     for pattern, kind in (
         (PARTIAL_DERIVATIVE_SCAN_RE, "partial_derivative"),
@@ -1606,6 +1821,10 @@ def candidate_spans(
     candidates.extend(chemistry_spans)
     chemistry_ranges = [(span.start, span.end) for span in chemistry_spans]
     claimed_ranges.extend(chemistry_ranges)
+
+    macro_spans = _latex_macro_spans(text, claimed_ranges)
+    candidates.extend(macro_spans)
+    claimed_ranges.extend((span.start, span.end) for span in macro_spans)
 
     index = 0
     while index < len(text):
@@ -1759,6 +1978,13 @@ def scan_docx(
                 elif span.explicit:
                     confidence = "high"
                     reason = "explicit LaTeX delimiter"
+                elif "\\" in source:
+                    # An undelimited LaTeX span. Testing for a backslash is
+                    # enough and needs no import: MATH_CHARS excludes it, so no
+                    # other built-in detector can produce a span containing
+                    # one, and a delimited span was already handled above.
+                    confidence = "medium"
+                    reason = "LaTeX macro without delimiters; review required"
                 elif chemistry_kind == "reaction":
                     confidence = "high"
                     reason = "chemical reaction pattern"

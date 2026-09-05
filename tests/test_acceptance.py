@@ -18,7 +18,7 @@ gen_docs = pytest.importorskip("tests.acceptance.gen_docs")
 
 @pytest.fixture(scope="session")
 def acceptance_docs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    """Generate the 5 acceptance DOCX files once per session."""
+    """Generate the acceptance DOCX files once per session."""
     tmp = tmp_path_factory.mktemp("acceptance")
     # Patch gen_docs.OUT to point to our tmp dir
     gen_docs.OUT = tmp
@@ -32,6 +32,7 @@ def acceptance_docs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]
         ("doc04", gen_docs.doc04_edge_cases),
         ("doc05", gen_docs.doc05_textbook),
         ("doc06", gen_docs.doc06_v040),
+        ("doc07", gen_docs.doc07_latex),
     ]:
         path = builder()
         paths[name] = path
@@ -69,7 +70,7 @@ def _scan_convert_validate(docx_path: Path, tmp_path: Path) -> dict:
 
 @pytest.mark.parametrize(
     "doc_name",
-    ["doc01", "doc02", "doc03", "doc04", "doc05", "doc06"],
+    ["doc01", "doc02", "doc03", "doc04", "doc05", "doc06", "doc07"],
 )
 def test_acceptance_scan_convert_validate(
     doc_name: str, acceptance_docs: dict[str, Path], tmp_path: Path
@@ -115,3 +116,26 @@ def test_acceptance_key_formulas_parse(acceptance_docs: dict[str, Path], tmp_pat
         assert all_parse_status.get(target) == "ok", (
             f"Regression formula {target!r} should parse ok, got {all_parse_status.get(target)!r}"
         )
+
+
+def test_acceptance_latex_formulas_parse(acceptance_docs: dict[str, Path], tmp_path: Path) -> None:
+    """Every LaTeX span in doc07 must be detected and parse, and the Windows path must not."""
+    scan_report = tmp_path / "doc07_latex_scan.json"
+    result = scan_docx(acceptance_docs["doc07"], scan_report)
+    by_source = {str(c.get("source", "")): c for c in result.get("candidates", [])}
+
+    for target in [
+        r"\(\frac{a}{b}\)",
+        r"\[ V = \sqrt[3]{x} \]",
+        r"\bar{x}",
+        r"\sum_{i=1}^{n} i",
+    ]:
+        assert target in by_source, f"{target!r} was not detected"
+        assert by_source[target]["parse_status"] == "ok"
+
+    # A delimited span is math the author marked as such; a bare macro is real
+    # notation the author did not, so it waits for review.
+    assert by_source[r"\(\frac{a}{b}\)"]["confidence"] == "high"
+    assert by_source[r"\bar{x}"]["confidence"] == "medium"
+
+    assert not any("Users" in source for source in by_source), "a Windows path became a candidate"
