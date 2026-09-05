@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from mathfmt import cli, gui
+from mathfmt.core import M_NS, W_NS
 from tests.helpers import make_docx, make_fake_xsl
 
 
@@ -405,3 +406,48 @@ def test_cli_gui_command_uses_explicit_xsl(tmp_path: Path, monkeypatch: pytest.M
 
     assert cli.main(["gui", "--no-browser", "--xsl", str(xsl)]) == 0
     assert calls["xsl_path"] == xsl.resolve()
+
+
+def _document_with(*paragraphs: str) -> str:
+    body = "".join(f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paragraphs)
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<w:document xmlns:w="{W_NS}" xmlns:m="{M_NS}"><w:body>{body}</w:body></w:document>'
+    )
+
+
+def _scan_one(tmp_path: Path, base_url: str, paragraph: str) -> dict[str, object]:
+    """Scan a one-paragraph document and return its first candidate."""
+    source = make_docx(tmp_path / "preview.docx", document_xml=_document_with(paragraph))
+    status, payload = _post_scan(base_url, source)
+    assert status == 200
+    candidates = [c for c in payload["candidates"] if c["source"]]
+    assert candidates, "the paragraph produced no candidate"
+    return candidates[0]
+
+
+def test_scan_returns_linear_and_mathml_for_each_candidate(tmp_path: Path, running_server: Any) -> None:
+    # The page needs the parser-ready text to seed its editor, and the MathML to
+    # show what the formula will look like. Both come from the scan response so
+    # the first render costs no extra round trip.
+    base_url, _ = running_server
+    candidate = _scan_one(tmp_path, base_url, "公式 $x^2 + 1$ 在此。")
+
+    assert candidate["source"] == "$x^2 + 1$"
+    # `linear`, not `source`: the delimiters are stripped for the parser, and a
+    # preview built from `source` would fail on the dollar signs.
+    assert candidate["linear"] == "x^2 + 1"
+    assert str(candidate["mathml"]).startswith("<math")
+    assert "msup" in str(candidate["mathml"])
+
+
+def test_scan_sends_no_mathml_for_an_unparseable_candidate(tmp_path: Path, running_server: Any) -> None:
+    # A preview is not a gate: the candidate is still listed with its existing
+    # parse_status and hint. None rather than "" so the page can tell "no
+    # preview available" from "an empty formula".
+    base_url, _ = running_server
+    candidate = _scan_one(tmp_path, base_url, "坏公式 $x = +$ 在此。")
+
+    assert candidate["parse_status"] != "ok"
+    assert candidate["mathml"] is None
+    assert candidate["linear"] == "x = +"

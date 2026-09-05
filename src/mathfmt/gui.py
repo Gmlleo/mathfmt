@@ -21,13 +21,16 @@ import tempfile
 import threading
 import time
 import webbrowser
+from collections.abc import Mapping
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from lxml import etree
+
 from ._version import __version__
-from .core import apply_docx, scan_docx
+from .core import FormulaError, apply_docx, formula_to_mathml, scan_docx
 
 _MAX_UPLOAD_BYTES = 128 * 1024 * 1024
 _MAX_SELECTION_BYTES = 2 * 1024 * 1024
@@ -102,6 +105,28 @@ class _Server(ThreadingHTTPServer):
         self.xsl_path = xsl_path
         self.sessions = _SessionStore()
         self.max_upload_bytes = _MAX_UPLOAD_BYTES
+
+
+def _mathml_for(candidate: Mapping[str, object]) -> str | None:
+    """Serialized MathML for a candidate, or ``None`` when it does not parse.
+
+    A preview is not a gate: a candidate that fails here is still listed, with
+    the ``parse_status`` and hint the scan already produced. ``None`` rather
+    than ``""`` so the page can tell "no preview available" from "an empty
+    formula".
+
+    Parses ``linear``, never ``source`` — the delimiters of ``$x^2+1$`` are
+    stripped for the parser, and previewing ``source`` would fail on them.
+    """
+    if candidate.get("parse_status") != "ok":
+        return None
+    linear = str(candidate.get("linear") or candidate.get("source") or "")
+    if not linear:
+        return None
+    try:
+        return etree.tostring(formula_to_mathml(linear), encoding="unicode")
+    except FormulaError:
+        return None
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -183,6 +208,8 @@ class _Handler(BaseHTTPRequestHandler):
             {
                 "id": c.get("id"),
                 "source": c.get("source", ""),
+                "linear": c.get("linear") or c.get("source", ""),
+                "mathml": _mathml_for(c),
                 "context": _truncate(c.get("paragraph_text", ""), _PARAGRAPH_PREVIEW_LIMIT),
                 "confidence": c.get("confidence"),
                 "confidence_reason": c.get("confidence_reason"),
