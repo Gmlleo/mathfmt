@@ -28,12 +28,12 @@ MathFmt/
 │   ├── __init__.py        # Stable public API exports (18 symbols)
 │   ├── _version.py        # Single version source: "1.1.0"
 │   ├── __main__.py        # `python -m mathfmt` entry point
-│   ├── cli.py             # argparse CLI: 7 subcommands (~570 lines)
-│   ├── gui.py              # mathfmt gui: stdlib-only local browser drag-and-drop server
+│   ├── cli.py             # argparse CLI: 7 subcommands (~590 lines)
+│   ├── gui.py              # mathfmt gui: stdlib-only local server + the whole page (~1000 lines)
 │   ├── aliases.py         # Validated user symbol-alias profiles
 │   ├── accents.py         # The accent kinds, in every representation they need
 │   ├── nary.py            # The n-ary big operators, in every representation they need
-│   ├── core.py            # Formula parser, scanner, and conversion pipeline (~2300 lines — the engine)
+│   ├── core.py            # Formula parser, scanner, and conversion pipeline (~2500 lines — the engine)
 │   ├── docxio.py          # Bounded ZIP I/O and hardened OOXML parsing
 │   ├── latex.py           # LaTeX input subset → linear syntax (pure text-to-text)
 │   ├── omml.py            # Pure-Python MathML→OMML converter
@@ -146,8 +146,46 @@ Seven subcommands via `argparse`:
 
 Library functions return structured results; the CLI translates them to exit codes. When adding an error field to a library result, also add a CLI exit-code test for that path — displaying an error message while the process still exits 0 breaks CI callers silently.
 
-### `gui.py` — Local browser drag-and-drop server
-`mathfmt gui` starts a plain-stdlib `http.server` bound to `127.0.0.1`, serves one self-contained HTML/JS page, and drives the same `scan_docx` → confidence-filter → `apply_docx` pipeline as `convert`. Each upload gets a private per-request temp directory; a `_SessionStore` token maps to it for the `/download` and `/report` routes and sweeps entries after a TTL. `BaseHTTPRequestHandler.send_error`'s `message` argument becomes the HTTP status line and must stay ASCII (it's encoded latin-1 by the stdlib); pass non-ASCII text via the `explain=` keyword instead, which is UTF-8-encoded into the body.
+### `gui.py` — Local browser server *and* the entire front end
+
+`mathfmt gui` starts a plain-stdlib `http.server` bound to `127.0.0.1` and serves one
+self-contained page. Both halves live in this one file: the request handler, and
+`PAGE_HTML` — the HTML, CSS and JavaScript as a single f-string.
+
+Routes: `POST /scan` (upload → candidates), `POST /preview/<token>` (one formula →
+MathML), `POST /apply/<token>` (convert the reviewed selection), `GET /download|/report`.
+Each upload gets a private temp directory; a `_SessionStore` token maps to it and sweeps
+after a TTL. A token is only ever issued by `/scan`, which is what keeps `/preview` from
+being an open formula compiler on localhost.
+
+The review loop, and the invariants that hold it together:
+
+- `/scan` sends each candidate's `linear` (parser-ready) **and** `mathml`. Anything that
+  previews or converts parses `linear`, never `source` — `source` still carries its
+  `$…$` delimiters.
+- `/preview` answers **200** with `{ok: false, error, hint}` for a formula that does not
+  parse. That is a normal answer to a valid request; 4xx is reserved for an expired
+  session or an over-cap body.
+- `/apply` accepts `{"selected", "linear"}` or a bare boolean (the pre-v1.4 shape). An
+  edited `linear` is written into `candidates.json` and re-parsed by `apply_docx`, so a
+  bad edit lands in `skipped` rather than in the document. Never trust the client's
+  preview.
+
+**Two traps when editing this file:**
+
+1. **MathML must enter the DOM through `DOMParser` + `importNode`, never `innerHTML`.**
+   Every other value the page inserts goes through `escapeHtml`; MathML is the only one
+   that must stay markup. Parsing it as XML keeps server-supplied document text away
+   from the HTML parser entirely. A test in `test_gui.py` guards this.
+2. **`PAGE_HTML` is an f-string.** Every literal JS/CSS brace must be doubled (`{{`,
+   `}}`), and every backslash the JavaScript needs must be written doubled in the Python
+   source (`/\\s+/g` to get `/\s+/g`). A single `\f`/`\b`/`\n` there silently becomes a
+   control character in the served page.
+
+`BaseHTTPRequestHandler.send_error`'s `message` becomes the HTTP status line and must stay
+ASCII (latin-1 encoded by the stdlib) — pass non-ASCII detail via `explain=`. The JSON
+helpers here (`_json_error`/`_json_response`) put everything in the body, so they are not
+subject to that; do not reach for `send_error` in a new route.
 
 ### `validate.py` — Validator
 Five validation layers:
@@ -197,6 +235,7 @@ mathfmt convert input.docx --output output.docx
 - Markers: `native_xsl` tests require Microsoft Office — CI runs them only on Windows; skip locally on non-Windows or non-Office machines (`pytest -m "not native_xsl"`).
 - Coverage: branch coverage, 85% threshold enforced by `pyproject.toml` `addopts`, HTML report in `htmlcov/`. A targeted/single-file run still inherits this repo-wide threshold and can exit nonzero on coverage alone even when every selected test passes — use the full suite for release validation, and don't mistake a subset-coverage failure for a product defect.
 - If `WinError 5` on Windows, use a fresh, uniquely named `--basetemp` (a fixed one can become undeletable after an interrupted/sandboxed run).
+- A nested `--basetemp=".pytest_tmp/run1"` fails with `WinError 3` (~130 setup errors, no product defect) unless the **parent** already exists: `mkdir -p .pytest_tmp` first, or pass a top-level path. `.pytest_tmp/` is the gitignored name.
 - Acceptance/render documents are generated via `tests/acceptance/gen_docs.py`; only `all_docs()` auto-creates its `OUT` directory — redirecting `gen_docs.OUT` to call a single document factory directly requires creating that directory first.
 
 ---
@@ -204,7 +243,7 @@ mathfmt convert input.docx --output output.docx
 ## Coding Conventions
 
 - **Line length:** 110 (configured in `pyproject.toml` `[tool.ruff]`)
-- **Linter:** ruff with rules `F` (Pyflakes), `I` (isort), `UP` (pyupgrade), plus `ruff format --check`
+- **Linter:** ruff with rules `F` (Pyflakes), `I` (isort), `UP` (pyupgrade), plus `ruff format --check`. Pinned to one minor series (`ruff>=0.16,<0.17`) because its pre-1.0 formatter can change stable style in any `0.x.0` — 0.16.0 started formatting Python blocks inside Markdown and broke CI on nine platforms with no code change. Markdown is excluded (`[tool.ruff] extend-exclude`): the docs quote *fragments*, and formatting each fence as a standalone module strips the indentation that shows where the excerpt belongs. Raising the pin is deliberate work: read ruff's changelog, run `ruff format` once, commit the result.
 - **Imports:** `from __future__ import annotations` at top of each module
 - **Typing:** type hints used throughout, `collections.abc.Sequence` not `typing.Sequence`
 - **Docstrings:** Google-style or concise single-line
@@ -219,7 +258,11 @@ mathfmt convert input.docx --output output.docx
 1. **Built-in Python** (`omml.py`) — cross-platform, no dependencies beyond lxml. Always available.
 2. **Microsoft Office XSL** — used automatically when present.
 
-**The CLI auto-detects the XSL and prefers it.** `convert`, `apply`, and `validate` all call `find_xsl()` when `--xsl` is not given and fall back to the Python backend only on `FileNotFoundError` (`cli.py:313-317`, and the equivalents near `cli.py:124`, `455`, `504`). So on a machine with Office installed, the default output comes from Microsoft's XSL, not from `omml.py`.
+**The CLI auto-detects the XSL and prefers it.** Every OMML-producing command handler in
+`cli.py` (`doctor`, `convert`, `apply`, `validate` — grep `find_xsl(`) calls `find_xsl()`
+when `--xsl` is not given and falls back to the Python backend only on
+`FileNotFoundError`. So on a machine with Office installed, the default output comes from
+Microsoft's XSL, not from `omml.py`. There is no flag that forces the Python backend.
 
 This matters when working on `omml.py`: a change there will not show up in a local `mathfmt convert` on a Windows machine with Office. Exercise the Python backend directly through `mathml_to_omml_py`, or via `mathml_to_omml(math, transform=None)`.
 
@@ -234,6 +277,13 @@ When available, the Office XSL backend generally produces output closer to Word'
 - **CI** (`.github/workflows/ci.yml`): Triggers on push/PR. Runs `ruff check .` and `ruff format --check .`, then tests Windows 3.10–3.14 plus Ubuntu/macOS 3.10 and 3.14 (`native_xsl` tests only on Windows), then runs `package`, 100-page `performance`, and `libreoffice-render` gates.
 - **CD** (`.github/workflows/publish.yml`): Triggers on tag push `v*`. Builds → publishes to PyPI via Trusted Publishing → creates GitHub Release. After publishing, verify the PyPI wheel's SHA-256 matches the GitHub Release asset digest.
 
+**Releasing** (the established flow — a PyPI version can never be replaced, so nothing here is undoable):
+1. Bump `_version.py`; date the `[Unreleased]` CHANGELOG section; add a `ROADMAP.md` entry; update the README status line and both version tables.
+2. **Bump the "newer release" fixtures in `tests/test_update.py` past the new version.** They are normally set one minor ahead, so they collide with exactly the release that catches up to them — update detection then correctly reports "no update" and the tests fail.
+3. Full gate on the release branch: `ruff check .`, `ruff format --check .`, `pytest -m "not native_xsl"`, `python -m build`.
+4. PR → merge to `main` → annotated tag on `main` → `git push origin vX.Y.Z`.
+5. Verify: `publish.yml`'s three jobs green, PyPI and GitHub Release digests equal, then install the published version in a clean venv and convert a document. A first `pip install` may report the version missing while the JSON API already serves it — that is PyPI's simple-index propagation lag, not a failed publish; retry.
+
 ---
 
 ## Key Project Knowledge
@@ -244,8 +294,10 @@ When available, the Office XSL backend generally produces output closer to Word'
 
 ## Related Files
 
-- Formula syntax reference: `docs/formula-syntax.md`
+- Formula syntax reference: `docs/formula-syntax.md` (§10 is the supported LaTeX subset and its limitations)
+- 1.x API stability contract: `docs/api.md`
 - User workflow guide: `docs/workflow.md`
+- Design specs and TDD implementation plans: `docs/superpowers/specs/`, `docs/superpowers/plans/` — each plan records the deviations taken during implementation and why, so read the plan alongside the code it produced
 - Examples walkthrough: `examples/README.md`
 - Project roadmap: `ROADMAP.md`
 - Design conventions: `skills/mathfmt/references/paper-notation.md`
