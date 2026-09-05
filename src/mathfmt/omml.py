@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from lxml import etree
 
 from .accents import ACCENT_CHARS, ACCENT_NAMES, OMML_ACCENT_CHARS
+from .nary import NARY_NAMES, OMML_IMPLIED_NARY_CHAR
 
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
@@ -44,23 +45,20 @@ MATHML_TAGS = {
 
 RELATION_SYMBOLS = ("=", "≤", "≥", "≠", "≈", "→", "⇒", "⇌", "<", ">")
 
-# The n-ary big-operator characters this module recognizes, in both directions,
-# kept in one table so they cannot drift apart.
+# Both directions read the one shared operator table (see mathfmt.nary), so a
+# new big operator taught to the parser is understood here without a second
+# edit — previously an operator added to core's table produced an ``m:chr``
+# this module's reverse direction then refused to read.
 #
-# Forward (`_nary`): a MathML ``munderover`` only becomes an ``m:nary`` when its
-# base is an ``mo`` holding one of these. Gating on the character — rather than
-# merely on the tag — is what keeps ``lim(x->0)`` out of the n-ary path; ``lim``
-# is a ``munder`` over an ``mi`` base and stays ``m:limLow``.
+# Forward (`_nary`): a MathML ``munderover`` only becomes an ``m:nary`` when
+# its base is an ``mo`` holding one of these characters. Gating on the
+# character — rather than merely on the tag — is what keeps ``lim(x->0)`` out
+# of the n-ary path; ``lim`` is a ``munder`` over an ``mi`` base.
 #
 # Reverse (`_emit_nary`): the same characters map back to their linear names.
 # ∫ never reaches the reverse path from MathFmt's own writer — ``int(...)``
-# always builds ``m:sSubSup`` (see ``_nary_mathml`` in core.py) — but a
-# Word-authored or hand-authored ``m:nary`` using ∫ is a real, common shape, so
-# it is reconstructed the same way.
-#
-# All three are also in MML2OMML.XSL's own grow-by-default list, which is why
-# `_nary` can write ``m:grow`` unconditionally.
-_NARY_OPERATOR_NAMES = {"∑": "sum", "∏": "prod", "∫": "int"}
+# with bounds builds ``m:sSubSup`` — but a Word-authored or hand-authored
+# ``m:nary`` using ∫ is a real, common shape, so it is reconstructed too.
 
 
 def mathml_to_omml_py(math_elem: etree._Element) -> etree._Element:
@@ -154,6 +152,20 @@ def _relation_alignment_matrix(
     return omath
 
 
+def _operator_char(elem: etree._Element) -> str:
+    """The normalized text of a MathML token element.
+
+    MathML token content is whitespace-insensitive, so pretty-printed input
+    carries newlines and indentation inside an ``<mo>``. OMML's ``m:chr`` is an
+    ``ST_Char`` — a single character — so that whitespace must not reach it;
+    writing it raw produced an ``m:chr`` this module's own reverse direction
+    then refused to read. MML2OMML.XSL passes ``normalize-space()`` into
+    ``CreateNaryProp`` for the same reason, and this collapses internal
+    whitespace runs and trims exactly as that does.
+    """
+    return " ".join((elem.text or "").split())
+
+
 def _is_nary_operator_group(elem: etree._Element) -> bool:
     """True for a ``munderover`` that is a bounded big operator (∑, ∏, ∫).
 
@@ -168,7 +180,7 @@ def _is_nary_operator_group(elem: etree._Element) -> bool:
     base = elem[0] if len(elem) else None
     if base is None or etree.QName(base).localname != "mo":
         return False
-    return (base.text or "").strip() in _NARY_OPERATOR_NAMES
+    return _operator_char(base) in NARY_NAMES
 
 
 def _convert_sequence(children: list[etree._Element], parent: etree._Element) -> None:
@@ -241,7 +253,10 @@ def _convert(elem: etree._Element, parent: etree._Element) -> None:
         else:
             _limit_upper(elem, parent)
     elif tag == "munderover":
-        _nary(elem, parent)
+        if _is_nary_operator_group(elem):
+            _nary(elem, parent)
+        else:
+            _stacked_limits(elem, parent)
     elif tag == "mtable":
         _matrix(elem, parent)
     elif tag == "mrow":
@@ -359,6 +374,37 @@ def _limit_upper(elem: etree._Element, parent: etree._Element) -> None:
         _convert(elem[1], lim)
 
 
+def _stacked_limits(elem: etree._Element, parent: etree._Element) -> None:
+    """Build nested ``m:limUpp``/``m:limLow`` for a ``munderover`` that is not
+    a bounded big operator — a doubly-annotated arrow, or any base that is not
+    an n-ary operator character in an ``mo``.
+
+    OMML has no single element for "base with both an under- and an
+    over-annotation", so Word stacks the two limit templates: an ``m:limUpp``
+    whose ``m:e`` holds an ``m:limLow``. MML2OMML.XSL produces exactly this for
+    every such ``munderover``, and it is lossless.
+
+    Routing these through :func:`_nary` instead — which is what this module did
+    before — produced an ``m:nary`` whose ``m:chr`` held the base's whole text
+    (``m:val="lim"``: three characters in an attribute ``ST_Char`` defines as
+    one), with an empty ``m:e`` and the operand orphaned as a following
+    sibling.
+    """
+    children = list(elem)
+    lim_upp = etree.SubElement(parent, qname(M_NS, "limUpp"))
+    outer_e = etree.SubElement(lim_upp, qname(M_NS, "e"))
+    lim_low = etree.SubElement(outer_e, qname(M_NS, "limLow"))
+    inner_e = etree.SubElement(lim_low, qname(M_NS, "e"))
+    if children:
+        _convert(children[0], inner_e)
+    under = etree.SubElement(lim_low, qname(M_NS, "lim"))
+    if len(children) > 1:
+        _convert(children[1], under)
+    over = etree.SubElement(lim_upp, qname(M_NS, "lim"))
+    if len(children) > 2:
+        _convert(children[2], over)
+
+
 def _nary(
     elem: etree._Element,
     parent: etree._Element,
@@ -392,13 +438,13 @@ def _nary(
     nary = etree.SubElement(parent, qname(M_NS, "nary"))
     nary_pr = etree.SubElement(nary, qname(M_NS, "naryPr"))
     chr_el = etree.SubElement(nary_pr, qname(M_NS, "chr"))
-    chr_el.set(qname(M_NS, "val"), children[0].text or "")
+    chr_el.set(qname(M_NS, "val"), _operator_char(children[0]))
     lim_loc = etree.SubElement(nary_pr, qname(M_NS, "limLoc"))
     lim_loc.set(qname(M_NS, "val"), "undOvr")
     # Without m:grow Word will not stretch the operator glyph to a tall
     # operand, so "sum(i=1,n) (a+b)/c" renders a small ∑ beside a full-height
     # fraction. MML2OMML.XSL writes grow="1" for every character in its
-    # big-operator list, which contains all of _NARY_OPERATOR_NAMES, so this is
+    # big-operator list, which contains all of NARY_NAMES, so this is
     # unconditional. "1"/"0" is both Office's spelling here and this file's own
     # ST_OnOff convention (compare _radical's degHide) — unlike subHide/supHide
     # just below, where Office writes "off"/"on" and this file deliberately
@@ -785,15 +831,15 @@ def _emit_limit(elem: etree._Element) -> str:
     )
 
 
-# ISO/IEC 29500's CT_NaryPr defines U+2211 N-ARY SUMMATION as the operator's
-# value when m:naryPr — or its m:chr child — is omitted entirely; m:naryPr is
-# itself minOccurs="0" in CT_Nary. That is the format's own documented default,
-# not this converter guessing, so an absent property is honored rather than
-# rejected as "the m:nary operator None". In practice this branch serves
-# third-party or hand-authored OMML: MathFmt's own writer and Office's
-# MML2OMML.XSL both always write m:chr explicitly (MML2OMML's CreateNaryProp
-# emits an unconditional <m:chr>), even for a plain summation.
-_DEFAULT_NARY_CHAR = "∑"
+# The character an omitted m:naryPr/m:chr implies lives with the operator table
+# (see mathfmt.nary): it is a fact about the format, not about this reader, and
+# it is deliberately a different character from the writer's unknown-name
+# fallback — keeping both under one name in two modules read as a contradiction.
+#
+# In practice this branch serves third-party or hand-authored OMML: MathFmt's
+# own writer and Office's MML2OMML.XSL both always write m:chr explicitly
+# (MML2OMML's CreateNaryProp emits an unconditional <m:chr>), even for a plain
+# summation.
 
 
 def _emit_nary(elem: etree._Element) -> str:
@@ -817,8 +863,8 @@ def _emit_nary(elem: etree._Element) -> str:
     # (the default applies only when m:chr/m:naryPr is missing outright), so it
     # falls through to the "unsupported operator" raise below rather than
     # silently becoming a summation. This mirrors _emit_accent exactly.
-    char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else _DEFAULT_NARY_CHAR
-    name = _NARY_OPERATOR_NAMES.get(char or "")
+    char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else OMML_IMPLIED_NARY_CHAR
+    name = NARY_NAMES.get(char or "")
     if name is None:
         raise OmmlConversionError(f"omml_to_text does not support the m:nary operator {char!r}")
     sub, sup = _find(elem, "sub"), _find(elem, "sup")

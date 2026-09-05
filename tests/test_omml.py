@@ -5,6 +5,13 @@ from lxml import etree
 
 from mathfmt.accents import ACCENT_NAMES, ACCENTS, OMML_ACCENT_CHARS
 from mathfmt.core import ACCENT_CHARS, M_NS, formula_to_mathml, qname
+from mathfmt.nary import (
+    FALLBACK_NARY_CHAR,
+    NARY_CHARS,
+    NARY_NAMES,
+    NARY_OPERATORS,
+    OMML_IMPLIED_NARY_CHAR,
+)
 from mathfmt.omml import (
     XML_NS,
     OmmlConversionError,
@@ -383,59 +390,93 @@ def test_nary_operand_is_the_rest_of_the_enclosing_sequence() -> None:
     assert "".join(omath[0].find(qname(M_NS, "e")).itertext()) == "a+b"
 
 
-def test_munderover_over_a_non_nary_operator_does_not_absorb_its_sibling() -> None:
-    # An mo base is necessary but not sufficient: a doubly-annotated arrow is a
-    # munderover over an operator that is not an n-ary big operator, so it keeps
-    # its stacked-annotation shape and does not swallow what follows it.
+def _stacked(omath: etree._Element) -> tuple[str, str, str]:
+    """Unpack the m:limUpp/m:limLow pair a non-n-ary munderover becomes."""
+    lim_upp = omath[0]
+    assert etree.QName(lim_upp).localname == "limUpp"
+    lim_low = lim_upp.find(qname(M_NS, "e"))[0]
+    assert etree.QName(lim_low).localname == "limLow"
+    return (
+        "".join(lim_low.find(qname(M_NS, "e")).itertext()),
+        "".join(lim_low.find(qname(M_NS, "lim")).itertext()),
+        "".join(lim_upp.find(qname(M_NS, "lim")).itertext()),
+    )
+
+
+@pytest.mark.parametrize(
+    ("base_tag", "base_text", "under", "over"),
+    [
+        # An mo base that is not an n-ary operator: a doubly-annotated arrow.
+        ("mo", "→", "cat", "heat"),
+        # A non-operator base, whatever it spells — including an mi merely
+        # spelling a summation sign, which MML2OMML.XSL's isNary also rejects
+        # because it requires the base to be an mml:mo.
+        ("mi", "x", "i", "n"),
+        ("mi", "∑", "i", "n"),
+        ("mi", "lim", "i", "n"),
+    ],
+)
+def test_non_nary_munderover_becomes_stacked_limits_not_a_malformed_nary(
+    base_tag: str, base_text: str, under: str, over: str
+) -> None:
+    # A munderover that is not a bounded big operator must not reach the n-ary
+    # writer at all. Routing it there produced an m:nary whose m:chr held the
+    # base's whole text — "lim", three characters in an attribute ST_Char
+    # defines as one — with an empty m:e and the operand orphaned as a sibling:
+    # the very shape the operand nesting was written to remove.
+    #
+    # MML2OMML.XSL converts every one of these to a nested
+    # m:limUpp/m:limLow pair instead, which is lossless and valid, so that is
+    # what is emitted here.
     mrow = etree.SubElement(etree.Element("math"), "mrow")
     munderover = etree.SubElement(mrow, "munderover")
-    etree.SubElement(munderover, "mo").text = "→"
-    for text in ("cat", "heat"):
-        etree.SubElement(munderover, "mtext").text = text
+    etree.SubElement(munderover, base_tag).text = base_text
+    etree.SubElement(munderover, "mi").text = under
+    etree.SubElement(munderover, "mi").text = over
     etree.SubElement(mrow, "mi").text = "a"
 
     omath = mathml_to_omml_py(mrow.getparent())
-    nary = omath[0]
-    assert etree.QName(nary).localname == "nary"
-    assert len(nary.find(qname(M_NS, "e"))) == 0
-    assert [etree.QName(child).localname for child in omath] == ["nary", "r"]
+    assert [etree.QName(child).localname for child in omath] == ["limUpp", "r"]
+    assert _stacked(omath) == (base_text, under, over)
+    assert omath.find(".//m:chr", namespaces=NS) is None
 
 
-def test_munder_over_an_nary_operator_is_not_rerouted_into_m_nary() -> None:
-    # A single-bound big operator is a munder, and `_nary_mathml` never emits
-    # one (with one bound it emits a bare mo instead). Absorption is therefore
-    # gated on the tag as well as the base: a munder keeps its existing
-    # m:limLow shape with the body left as a following sibling, rather than
-    # being silently rerouted through the n-ary writer.
-    mrow = etree.SubElement(etree.Element("math"), "mrow")
-    munder = etree.SubElement(mrow, "munder")
-    etree.SubElement(munder, "mo").text = "∑"
-    etree.SubElement(munder, "mi").text = "i"
-    etree.SubElement(mrow, "mi").text = "a"
-
-    omath = mathml_to_omml_py(mrow.getparent())
-    assert [etree.QName(child).localname for child in omath] == ["limLow", "r"]
+def test_no_generated_m_chr_is_ever_longer_than_one_character() -> None:
+    # m:chr's ST_Char is a single character. Any multi-character value is
+    # malformed OMML that Word cannot round-trip, so hold every writer in this
+    # module to the type.
+    for source in ("sum(i=1,n) i", "prod(k=1,m) k", "accent(x,vec)", "int(0,1) f"):
+        for chr_el in omath_for(source).xpath(".//m:chr", namespaces=NS):
+            assert len(chr_el.get(qname(M_NS, "val")) or "") == 1
 
 
-@pytest.mark.parametrize("base_text", ["x", "∑"])
-def test_munderover_over_a_non_operator_base_does_not_absorb_its_sibling(base_text: str) -> None:
-    # The operand nesting is gated on the base being an *operator* (mo) holding
-    # an n-ary character — both halves matter. A munderover over an ordinary
-    # identifier is an under/over annotation, not a big operator; and an mi
-    # merely *spelling* a summation sign is not one either (MML2OMML.XSL's own
-    # isNary test likewise requires the base to be an mml:mo). In both cases
-    # what follows is not the operator's operand and must stay a sibling.
-    mrow = etree.SubElement(etree.Element("math"), "mrow")
-    munderover = etree.SubElement(mrow, "munderover")
-    for text in (base_text, "i", "n"):
-        etree.SubElement(munderover, "mi").text = text
-    etree.SubElement(mrow, "mi").text = "a"
+PRETTY_PRINTED_SUM = """<math xmlns="http://www.w3.org/1998/Math/MathML">
+  <mrow>
+    <munderover>
+      <mo>
+        ∑
+      </mo>
+      <mi>i</mi>
+      <mi>n</mi>
+    </munderover>
+    <mi>a</mi>
+  </mrow>
+</math>"""
 
-    omath = mathml_to_omml_py(mrow.getparent())
-    assert [etree.QName(child).localname for child in omath] == ["nary", "r"]
-    e = omath[0].find(qname(M_NS, "e"))
-    assert e is not None
-    assert len(e) == 0
+
+def test_nary_normalizes_a_whitespace_padded_operator() -> None:
+    # Pretty-printed MathML is ordinary input, and MathML token content is
+    # whitespace-insensitive, so an <mo> can carry newlines and indentation
+    # around its character. Writing that text raw put the whitespace into
+    # m:chr — whose ST_Char is a single character — and omml_to_text then
+    # refused MathFmt's own forward output. MML2OMML.XSL passes
+    # normalize-space() into CreateNaryProp for exactly this reason.
+    omath = mathml_to_omml_py(etree.fromstring(PRETTY_PRINTED_SUM.encode()))
+
+    chr_el = omath.find(".//m:naryPr/m:chr", namespaces=NS)
+    assert chr_el is not None
+    assert chr_el.get(qname(M_NS, "val")) == "∑"
+    assert omml_to_text(omath) == "sum(i,n)a"
 
 
 @pytest.mark.parametrize("source", ["sum(i=1,n) i", "prod(k=1,m) k", "sum(i=1,n) (a+b)/c"])
@@ -885,6 +926,46 @@ def test_omml_to_text_nary_rejects_unrecognized_operator() -> None:
 
     with pytest.raises(OmmlConversionError, match="does not support the m:nary operator"):
         omml_to_text(omath)
+
+
+def test_nary_table_is_unambiguous() -> None:
+    # NARY_CHARS and NARY_NAMES are inverse views of one NARY_OPERATORS tuple,
+    # so a duplicate name or a duplicate character would silently collapse two
+    # operators into one in whichever direction lost the row. Both documented
+    # defaults must also name operators the table actually knows, or the branch
+    # that reaches for one raises on a value this module itself supplied.
+    names = [name for name, _ in NARY_OPERATORS]
+    chars = [char for _, char in NARY_OPERATORS]
+    assert len(set(names)) == len(names)
+    assert len(set(chars)) == len(chars)
+    assert len(NARY_CHARS) == len(NARY_NAMES) == len(NARY_OPERATORS)
+    assert FALLBACK_NARY_CHAR in NARY_NAMES
+    assert OMML_IMPLIED_NARY_CHAR in NARY_NAMES
+
+
+@pytest.mark.parametrize(("char", "name"), sorted(NARY_NAMES.items()))
+def test_every_nary_operator_crosses_both_directions(char: str, name: str) -> None:
+    # The one drift this shared table exists to prevent: an operator taught to
+    # the parser but not to this module produced an m:chr the reverse direction
+    # then refused to read. Iterating the table means a row added to it is
+    # exercised in both directions here automatically, rather than needing a
+    # second edit someone can forget.
+    #
+    # Forward: a munderover over the character is a bounded big operator and
+    # takes the m:nary path, not the stacked-limits path.
+    mrow = etree.SubElement(etree.Element("math"), "mrow")
+    munderover = etree.SubElement(mrow, "munderover")
+    etree.SubElement(munderover, "mo").text = char
+    for bound in ("i", "n"):
+        etree.SubElement(munderover, "mi").text = bound
+    forward = mathml_to_omml_py(mrow.getparent())
+    assert [etree.QName(child).localname for child in forward] == ["nary"]
+    assert forward.find(".//m:naryPr/m:chr", namespaces=NS).get(qname(M_NS, "val")) == char
+
+    # Reverse: the same character comes back as its linear name.
+    omath = etree.Element(qname(M_NS, "oMath"))
+    _word_nary(omath, chr_val=char)
+    assert omml_to_text(omath) == f"{name}(i=1,n)x"
 
 
 def test_omml_to_text_rejects_unrecognized_lim_base() -> None:

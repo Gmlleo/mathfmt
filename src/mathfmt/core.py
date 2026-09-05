@@ -17,6 +17,7 @@ from ._version import __version__
 from .accents import ACCENT_CHARS
 from .aliases import AliasProfile, alias_profile_metadata, validate_review_alias_profile
 from .docxio import inspect_docx, parse_xml_part, write_docx
+from .nary import FALLBACK_NARY_CHAR, NARY_CHARS, NARY_NAMES
 from .omml import combine_equation_array, mathml_to_omml_py
 from .plugins import (
     FormulaCandidate,
@@ -828,9 +829,9 @@ class Parser:
                 )
             if name in self.aliases:
                 return Node("alias", self.aliases[name], meta={"name": name})
-            if name in {"∫", "∏", "∑"}:
+            if name in NARY_NAMES:
                 return self._parse_nary(name)
-            if name in {"int", "sum", "prod"}:
+            if name in NARY_CHARS:
                 if self.current.kind == "LPAREN":
                     bounds = self.parse_group()
                     body = self.parse_add()
@@ -1097,8 +1098,11 @@ def node_to_mathml(node: Node) -> etree._Element:
 def _nary_mathml(node: Node) -> etree._Element:
     """Generate MathML for n-ary operators: int/sum/prod."""
     name = node.value or "int"
-    op_map = {"int": "∫", "sum": "∑", "prod": "∏", "∫": "∫", "∑": "∑", "∏": "∏"}
-    op_char = op_map.get(name, "∫")
+    # `name` is either a linear name ("sum") or the operator character itself
+    # (the bare-Unicode spelling the parser also accepts); both resolve through
+    # the one shared table, and anything unrecognized keeps the historical
+    # integral default.
+    op_char = NARY_CHARS.get(name, name if name in NARY_NAMES else FALLBACK_NARY_CHAR)
 
     # Backward compatibility: bare Unicode nary (∫ / ∑ / ∏) without children
     if not node.children:
