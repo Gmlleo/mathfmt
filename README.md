@@ -121,12 +121,13 @@ MathFmt 1.0 also supports trusted custom formula recognizers through repeatable
 
 ## Status
 
-**Stable (v1.3.0).** Feature-complete cross-platform OMML conversion with a stable
+**Stable (v1.4.0).** Feature-complete cross-platform OMML conversion with a stable
 Python API, deterministic custom recognizers, structured safety reports, batch
 processing, WPS/LibreOffice compatibility checks, a 100-page performance gate, and
 an optional local drag-and-drop GUI (`mathfmt gui`) with a candidate review step
 and a reverse OMML → text converter for tooling built on top of MathFmt.
-Since v1.3.0 a formula may also be written in a documented subset of LaTeX.
+Since v1.3.0 a formula may also be written in a documented subset of LaTeX, and
+since v1.4.0 the GUI renders and edits each candidate before converting.
 
 ---
 
@@ -219,6 +220,7 @@ pip install --upgrade mathfmt
 | **1.1.0** (2026-08-31) | `mathfmt gui`：本地浏览器拖拽界面，无需终端命令 |
 | **1.2.0** (2026-09-03) | `mathfmt gui` 转换前逐条审核公式；解析错误附带提示；`omml_to_text` 反向转换；可选独立 exe 打包 |
 | **1.3.0** (2026-09-05) | LaTeX 输入子集；`root`/`accent`/引号直立文本三个新构造；LaTeX 分隔符与裸宏扫描 |
+| **1.4.0** (2026-09-05) | `mathfmt gui` 逐条渲染公式预览与就地编辑；新增 `/preview` 路由 |
 
 ### 更多文档
 
@@ -331,6 +333,7 @@ pip install --upgrade mathfmt
 | **1.1.0** (2026-08-31) | `mathfmt gui`: a local browser drag-and-drop interface, no terminal commands needed |
 | **1.2.0** (2026-09-03) | `mathfmt gui` per-candidate review before converting; plain-language parse-error hints; `omml_to_text` reverse conversion; optional standalone exe packaging |
 | **1.3.0** (2026-09-05) | LaTeX input subset; the `root`, `accent`, and quoted-text constructs; LaTeX delimiter and bare-macro scanning |
+| **1.4.0** (2026-09-05) | `mathfmt gui` renders and edits each candidate before converting; new `/preview` route |
 
 ### Further Reading
 

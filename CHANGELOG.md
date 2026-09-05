@@ -2,7 +2,7 @@
 
 All notable changes to MathFmt are documented here.
 
-## [Unreleased]
+## [1.4.0] - 2026-09-05
 
 ### Added
 - **`mathfmt gui` previews and edits each formula before converting.** Every
@@ -34,6 +34,11 @@ All notable changes to MathFmt are documented here.
   until a push. No effect on the published package — this is a development
   dependency only. Contributors on an older ruff should re-run
   `pip install -e ".[dev]"`.
+- `omml_to_text` reports an `m:acc`/`m:nary` whose `m:chr` is present but
+  carries no `m:val` with its own message (`found an m:acc m:chr with no
+  m:val`) instead of the previous `does not support the accent character
+  None`. Both cases already raised `OmmlConversionError`; only the message
+  changed, so code matching on the old text needs updating.
 
 ## [1.3.0] - 2026-09-05
 
