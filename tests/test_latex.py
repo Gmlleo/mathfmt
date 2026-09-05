@@ -183,3 +183,63 @@ def test_a_large_operator_without_limits_is_left_alone() -> None:
     # No scripts at all is not the failure case: `\lim f` is ordinary text the
     # tokenizer already knows, and binding is only owed where a script exists.
     assert expand_latex(r"\lim f") == "lim f"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (r"\begin{matrix} a & b \\ c & d \end{matrix}", "[[a,b],[c,d]]"),
+        (r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}", "[[a,b],[c,d]]"),
+        (r"\begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix}", "[[1,0],[0,1]]"),
+        (r"\begin{cases} 0 & x<0 \\ 1 & x \geq 0 \end{cases}", "{0, x<0; 1, x≥0}"),
+        (r"\begin{aligned} a=b \\ c=d \end{aligned}", r"a=b \\ c=d"),
+        (r"\begin{align} a=b \\ c=d \end{align}", r"a=b \\ c=d"),
+        (r"\begin{align*} a=b \\ c=d \end{align*}", r"a=b \\ c=d"),
+        # The rows of an environment go through every later pass too.
+        (r"\begin{aligned} \alpha=\frac{a}{b} \\ c=d \end{aligned}", r"α=(a)/(b) \\ c=d"),
+    ],
+)
+def test_environments_expand(source: str, expected: str) -> None:
+    assert expand_latex(source).replace(" ", "") == expected.replace(" ", "")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        r"\begin{smallmatrix} a \end{smallmatrix}",
+        r"\begin{matrix} a & b \end{pmatrix}",
+        r"a \\ b",
+    ],
+)
+def test_unsupported_environments_and_stray_row_breaks_are_rejected(source: str) -> None:
+    # The last case is the load-bearing one: `\\` has no meaning in LaTeX
+    # outside an environment, and must not silently reach
+    # split_multiline_formula as a two-row formula the author never wrote.
+    with pytest.raises(FormulaError):
+        expand_latex(source)
+
+
+def test_a_cases_branch_needs_both_a_value_and_a_condition() -> None:
+    with pytest.raises(FormulaError):
+        expand_latex(r"\begin{cases} 0 \\ 1 & x \geq 0 \end{cases}")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        r"\begin{cases}",
+        r"\begin{cases} 0 & x<0 \end{cases}",
+        r"\frac{a}{b}",
+        r"\sqrt[3]{x}",
+    ],
+)
+def test_contains_latex_macro_detects_the_argument_and_environment_macros(text: str) -> None:
+    # These join the detector as their expansion lands (see Task 8's revision
+    # note): detection and expansion always name the same set.
+    assert contains_latex_macro(text) is True
+
+
+def test_a_stray_row_separator_is_not_a_macro() -> None:
+    # `a \\ b` must not be *detected* as LaTeX either, or the scanner promotes
+    # a span whose only "macro" is a separator it will then be refused for.
+    assert contains_latex_macro(r"a \\ b") is False

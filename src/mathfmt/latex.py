@@ -81,11 +81,27 @@ TEXT_MACROS = {"text", "mathrm"}
 #: ``\left( a \right)`` is just ``( a )`` — MathML stretches fences on its own.
 SIZING_MACROS = {"left", "right"}
 
+#: All three become the same matrix literal; the bracket style is LaTeX's, and
+#: MathFmt's own ``[[…]]`` chooses its fences from context.
+MATRIX_ENVIRONMENTS = {"matrix", "pmatrix", "bmatrix"}
+
+#: Multi-row alignment. These keep their ``\\`` separators for
+#: ``core.split_multiline_formula``, which lays the rows out as one equation
+#: array — this module only strips the environment around them.
+ALIGN_ENVIRONMENTS = {"aligned", "align", "align*"}
+
+#: The environment delimiters. They are in :data:`KNOWN_MACROS` so that a
+#: document using ``\begin{cases}`` is detected as LaTeX; an unbalanced or
+#: unsupported one is then named by the environment pass, which runs first.
+ENVIRONMENT_MACROS = {"begin", "end"}
+
 # A macro is a backslash followed by letters (with LaTeX's optional starred
 # form), or one of the single-character control symbols. The row separator
-# `\\` is matched so that it is *seen*; it is not a known macro here, and only
-# the environment pass gives it a meaning.
-MACRO_RE = re.compile(r"\\(?:[A-Za-z]+\*?|[,;!\\])")
+# `\\` is deliberately *not* one: the environment pass consumes the separators
+# it owns, expand_latex splits on what is left before the other passes run,
+# and a `\\` that was never inside an environment is refused rather than
+# reaching split_multiline_formula as a row break the author never wrote.
+MACRO_RE = re.compile(r"\\(?:[A-Za-z]+\*?|[,;!])")
 
 #: Every macro name this module can expand. See the module docstring.
 KNOWN_MACROS = (
@@ -97,7 +113,17 @@ KNOWN_MACROS = (
     | FRACTION_MACROS
     | TEXT_MACROS
     | SIZING_MACROS
+    | ENVIRONMENT_MACROS
 )
+
+ENVIRONMENT_RE = re.compile(
+    r"\\begin\{(?P<name>[A-Za-z]+\*?)\}(?P<body>.*?)\\end\{(?P=name)\}",
+    re.DOTALL,
+)
+
+#: The row separator, as a pattern. Two literal backslashes.
+ROW_BREAK_RE = re.compile(r"\\\\")
+ROW_BREAK = r" \\ "
 
 
 def contains_latex_macro(text: str) -> bool:
@@ -113,18 +139,33 @@ def contains_latex_macro(text: str) -> bool:
 def expand_latex(source: str) -> str:
     """Expand the supported LaTeX subset into MathFmt linear syntax.
 
-    Four passes, and the order is load-bearing:
+    Five passes, and the order is load-bearing:
 
-    1. the argument-taking macros, which consume braced groups whose contents
+    1. the environments, first, because ``&`` and ``\\\\`` only carry meaning
+       inside one;
+    2. the argument-taking macros, which consume braced groups whose contents
        may themselves be macros;
-    2. ``_{…}``/``^{…}`` into MathFmt's parenthesized script form;
-    3. binding a large operator's scripts into its ``name(lower,upper)`` call,
+    3. ``_{…}``/``^{…}`` into MathFmt's parenthesized script form;
+    4. binding a large operator's scripts into its ``name(lower,upper)`` call,
        which needs the scripts already parenthesized to find them;
-    4. the single-token symbol substitutions, last, so that ``\\to`` inside
-       ``\\lim_{x \\to 0}`` is still a macro while step 3 moves it.
+    5. the single-token symbol substitutions, last, so that ``\\to`` inside
+       ``\\lim_{x \\to 0}`` is still a macro while step 4 moves it.
+
+    Steps 2-5 run per row. Splitting on the surviving row separators first
+    keeps them intact for ``core.split_multiline_formula`` while letting every
+    other pass work on separator-free text.
     """
-    expanded = _bind_limits(_expand_scripts(_expand_arguments(source)))
-    return _expand_symbols(expanded)
+    if ROW_BREAK_RE.search(source) and not ENVIRONMENT_RE.search(source):
+        raise FormulaError(
+            "A row separator is only meaningful inside an aligned, matrix, or cases environment",
+            expected="a supported LaTeX macro",
+            found=ROW_BREAK.strip(),
+            source=source,
+        )
+    rows = ROW_BREAK_RE.split(_expand_environments(source))
+    return ROW_BREAK.join(
+        _expand_symbols(_bind_limits(_expand_scripts(_expand_arguments(row)))) for row in rows
+    )
 
 
 def _macro_name(macro: str) -> str:
@@ -139,6 +180,58 @@ def _reject(name: str, source: str, position: int) -> FormulaError:
         found=f"\\{name}",
         source=source,
     )
+
+
+def _rows(body: str) -> list[list[str]]:
+    """An environment body as rows of cells: ``\\\\`` between rows, ``&`` between cells."""
+    return [[cell.strip() for cell in row.split("&")] for row in ROW_BREAK_RE.split(body) if row.strip()]
+
+
+def _expand_environments(source: str) -> str:
+    """Replace each supported environment with its MathFmt equivalent."""
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group("name")
+        rows = _rows(match.group("body"))
+        if name in MATRIX_ENVIRONMENTS:
+            return "[[" + "],[".join(",".join(row) for row in rows) + "]]"
+        if name == "cases":
+            branches = []
+            for row in rows:
+                # MathFmt's brace form pairs a value with a condition; a row
+                # that is not a pair has no reading that is not a guess about
+                # which half is missing.
+                if len(row) != 2:
+                    raise FormulaError(
+                        "Each cases branch needs a value and a condition separated by &",
+                        expected="a supported LaTeX macro",
+                        found=" & ".join(row),
+                        source=source,
+                    )
+                branches.append(f"{row[0]}, {row[1]}")
+            return "{" + "; ".join(branches) + "}"
+        if name in ALIGN_ENVIRONMENTS:
+            # `&` is only an alignment hint here, and MathFmt aligns on the
+            # relation itself, so the cells simply rejoin.
+            return ROW_BREAK.join(" ".join(row) for row in rows)
+        raise FormulaError(
+            f"MathFmt does not support the LaTeX environment {name}",
+            expected="a supported LaTeX macro",
+            found=name,
+            source=source,
+        )
+
+    expanded = ENVIRONMENT_RE.sub(replace, source)
+    # ENVIRONMENT_RE pairs \begin{x} with \end{x} by name, so anything left is
+    # unbalanced or mismatched — never silently dropped.
+    if "\\begin" in expanded or "\\end" in expanded:
+        raise FormulaError(
+            "Unbalanced LaTeX environment",
+            expected="a supported LaTeX macro",
+            found="\\begin",
+            source=source,
+        )
+    return expanded
 
 
 def _read_group(source: str, index: int, opener: str, closer: str) -> tuple[str, int]:
