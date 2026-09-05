@@ -3,8 +3,14 @@ from __future__ import annotations
 import pytest
 from lxml import etree
 
-from mathfmt.accents import ACCENT_NAMES, ACCENTS, OMML_ACCENT_CHARS
-from mathfmt.core import ACCENT_CHARS, M_NS, formula_to_mathml, qname
+from mathfmt.accents import (
+    ACCENT_CHARS,
+    ACCENT_NAMES,
+    ACCENTS,
+    DEFAULT_OMML_ACCENT,
+    OMML_ACCENT_CHARS,
+)
+from mathfmt.core import M_NS, formula_to_mathml, qname
 from mathfmt.nary import (
     FALLBACK_NARY_CHAR,
     NARY_CHARS,
@@ -167,21 +173,17 @@ def test_annotated_arrow_still_uses_lim_upp() -> None:
     assert "limUpp" in tags("CaCO3 =>[heat] CaO + CO2")
 
 
-def test_every_accent_kind_survives_the_full_round_trip() -> None:
-    # ACCENT_CHARS, OMML_ACCENT_CHARS, and ACCENT_NAMES all derive from the
-    # single ACCENTS tuple now, so they cannot drift apart from each other —
-    # test_accent_table_is_unambiguous already covers that. What can still
-    # regress silently is the pipeline built on top of the table: scan_docx
-    # calls formula_to_mathml only, so a formula is reported parse_status="ok"
-    # and approved for apply on the strength of that call alone; if
-    # mathml_to_omml_py or omml_to_text then failed to handle the character
-    # formula_to_mathml just emitted, the candidate would fail at apply time
-    # (recorded in `skipped` as status="failed") or refuse to reverse, after
-    # scan already told the user it was fine. Iterating ACCENTS directly means
-    # a kind added to the table is exercised here automatically.
-    for kind in ACCENT_CHARS:
-        source = f"accent(x,{kind})"
-        assert omml_to_text(omath_for(source)) == source
+@pytest.mark.parametrize("kind", [name for name, _, _ in ACCENTS])
+def test_every_accent_kind_survives_the_full_round_trip(kind: str) -> None:
+    # The table's three views cannot drift from each other —
+    # test_accent_table_is_unambiguous covers that. The residual risk is the
+    # pipeline built on top of it: scan_docx calls formula_to_mathml only, so a
+    # kind it can emit but mathml_to_omml_py or omml_to_text cannot handle is
+    # reported parse_status="ok" and then fails at apply time, after scan
+    # already told the reader it was fine. Reading ACCENTS means a kind added
+    # to the table is exercised here automatically.
+    source = f"accent(x,{kind})"
+    assert omml_to_text(omath_for(source)) == source
 
 
 def test_quoted_text_produces_a_plain_run() -> None:
@@ -919,7 +921,7 @@ def test_omml_to_text_rejects_a_valueless_nary_chr() -> None:
     assert nary_pr is not None
     nary_pr.insert(0, etree.Element(qname(M_NS, "chr")))
 
-    with pytest.raises(OmmlConversionError, match="does not support the m:nary operator"):
+    with pytest.raises(OmmlConversionError, match="m:nary m:chr with no m:val"):
         omml_to_text(omath)
 
 
@@ -1049,13 +1051,6 @@ def test_omml_to_text_plain_styled_non_digit_subscript_still_uses_underscore() -
     assert omml_to_text(omath) == "x_max"
 
 
-@pytest.mark.parametrize(
-    "source", ["accent(x,bar)", "accent(F,vec)", "accent(y,hat)", "accent(q,dot)", "accent(q,ddot)"]
-)
-def test_accent_round_trips_through_omml_to_text(source: str) -> None:
-    assert omml_to_text(omath_for(source)) == source
-
-
 def test_accent_round_trips_with_a_compound_base() -> None:
     assert omml_to_text(omath_for("accent(a+b,bar)")) == "accent(a+b,bar)"
 
@@ -1104,11 +1099,35 @@ def test_omml_to_text_rejects_accent_with_unrecognized_chr_value() -> None:
         omml_to_text(omath)
 
 
+def test_a_bare_third_party_accent_normalizes_on_a_second_pass() -> None:
+    # A hand-authored m:acc may omit m:accPr entirely, leaning on the format's
+    # implied hat. Reading it resolves that default, so re-emitting writes the
+    # mark explicitly: a second pass through MathFmt normalizes the element
+    # rather than round-tripping it byte-for-byte. That is spec-correct, and
+    # worth pinning because it is the observable consequence of honoring an
+    # implied value instead of rejecting the element.
+    omath = etree.Element(qname(M_NS, "oMath"))
+    acc = etree.SubElement(omath, qname(M_NS, "acc"))
+    e = etree.SubElement(acc, qname(M_NS, "e"))
+    run = etree.SubElement(e, qname(M_NS, "r"))
+    etree.SubElement(run, qname(M_NS, "t")).text = "x"
+    assert acc.find(qname(M_NS, "accPr")) is None
+
+    linear = omml_to_text(omath)
+    assert linear == "accent(x,hat)"
+
+    reemitted = omath_for(linear)
+    chr_el = reemitted.find(".//m:accPr/m:chr", namespaces=NS)
+    assert chr_el is not None
+    assert chr_el.get(qname(M_NS, "val")) == DEFAULT_OMML_ACCENT
+    # And the normalized form is stable: a third pass changes nothing.
+    assert omml_to_text(reemitted) == linear
+
+
 def test_omml_to_text_rejects_accent_chr_with_no_val() -> None:
-    # ISO/IEC 29500: m:chr present but without m:val means the character
-    # itself is absent, a narrower case than m:chr/m:accPr being missing
-    # outright — the spec-defined hat default applies only to the latter, so
-    # this must not be silently treated as hat either.
+    # A present m:chr with no m:val names no character, and the spec's implied
+    # hat covers an *absent* property, not a valueless one — so this is
+    # rejected, by its own message rather than as an unsupported "None".
     omath = etree.Element(qname(M_NS, "oMath"))
     acc = etree.SubElement(omath, qname(M_NS, "acc"))
     acc_pr = etree.SubElement(acc, qname(M_NS, "accPr"))
@@ -1117,5 +1136,5 @@ def test_omml_to_text_rejects_accent_chr_with_no_val() -> None:
     run = etree.SubElement(e, qname(M_NS, "r"))
     etree.SubElement(run, qname(M_NS, "t")).text = "x"
 
-    with pytest.raises(OmmlConversionError, match="accent character None"):
+    with pytest.raises(OmmlConversionError, match="m:acc m:chr with no m:val"):
         omml_to_text(omath)

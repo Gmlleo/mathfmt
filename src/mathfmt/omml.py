@@ -8,7 +8,7 @@ from collections.abc import Sequence
 
 from lxml import etree
 
-from .accents import ACCENT_CHARS, ACCENT_NAMES, OMML_ACCENT_CHARS
+from .accents import ACCENT_NAMES, DEFAULT_OMML_ACCENT, OMML_ACCENT_CHARS
 from .nary import NARY_NAMES, OMML_IMPLIED_NARY_CHAR
 
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
@@ -525,19 +525,24 @@ def omml_to_text(omath_elem: etree._Element) -> str:
     (including derivative and partial-derivative fractions), radicals (both
     ``sqrt(...)`` and, via a visible ``m:deg``, the n-th root ``root(base,n)``),
     super/subscripts, delimited groups (parentheses, brackets, braces, bra-ket,
-    vectors), limits / annotated reaction arrows, accents (``m:acc``,
-    including a base of its own accent for a nested ``accent(accent(x,bar),vec)``),
-    and bounded n-ary big operators (``m:nary``, e.g. ``sum(i=1,n) i`` /
-    ``prod(k=1,m) k``) — an ``m:nary`` missing one of its two bounds, or
-    naming an operator character this converter doesn't recognize, still
-    raises :class:`OmmlConversionError` rather than guessing. An ``m:nary``
-    that omits ``m:naryPr``/``m:chr`` altogether is read as the summation the
-    format documents as that element's default, not rejected.
-    Constructs this converter does not reverse — matrices, piecewise/cases tables, and **MathFmt's own
-    multi-line/aligned equation output** (also built from a native OMML matrix
-    or ``m:eqArr``, despite not being a mathematical matrix) — raise
-    :class:`OmmlConversionError` naming the unsupported element instead of
-    guessing at a wrong answer.
+    vectors), limits / annotated reaction arrows, accents (``m:acc``, whose
+    base may itself be an accent, as in ``accent(accent(x,bar),vec)``), and
+    bounded n-ary big operators (``m:nary``, e.g. ``sum(i=1,n) i`` /
+    ``prod(k=1,m) k``).
+
+    An ``m:nary`` missing one of its two bounds, or naming an operator
+    character this converter doesn't recognize, raises
+    :class:`OmmlConversionError` rather than guessing. One that omits
+    ``m:naryPr``/``m:chr`` altogether is read as the summation the format
+    documents as that element's default; a *present* ``m:chr`` carrying no
+    ``m:val`` names nothing and is rejected. ``m:acc`` follows the same three
+    rules, with a hat as its documented default.
+
+    Constructs this converter does not reverse — matrices, piecewise/cases
+    tables, and **MathFmt's own multi-line/aligned equation output** (also
+    built from a native OMML matrix or ``m:eqArr``, despite not being a
+    mathematical matrix) — raise :class:`OmmlConversionError` naming the
+    unsupported element instead of guessing at a wrong answer.
 
     The result re-parses (via :func:`formula_to_mathml <mathfmt.core.formula_to_mathml>`)
     to an equivalent formula, not necessarily byte-identical input text — for
@@ -842,6 +847,29 @@ def _emit_limit(elem: etree._Element) -> str:
 # summation.
 
 
+def _property_char(parent: etree._Element | None, implied: str, what: str) -> str:
+    """The character an ``m:chr`` names, or the format's implied default.
+
+    Three cases the spec separates and this keeps separate:
+
+    * ``m:chr`` (or its parent property) missing entirely — ISO/IEC 29500
+      defines an implied value, so it is honored rather than rejected.
+    * ``m:chr`` present with an ``m:val`` — that character, whatever it is.
+    * ``m:chr`` present with no ``m:val`` — *not* the same as absent. The
+      element names no character, and the implied value covers an absent
+      property, not a valueless one. Raised here with a message naming the
+      element, rather than falling through to the caller's
+      "unsupported character None", which no document author can act on.
+    """
+    chr_el = _find(parent, "chr") if parent is not None else None
+    if chr_el is None:
+        return implied
+    char = chr_el.get(qname(M_NS, "val"))
+    if char is None:
+        raise OmmlConversionError(f"omml_to_text found an {what} m:chr with no m:val")
+    return char
+
+
 def _emit_nary(elem: etree._Element) -> str:
     """Reconstruct ``m:nary`` as ``name(sub,sup)`` followed by its operand.
 
@@ -856,15 +884,8 @@ def _emit_nary(elem: etree._Element) -> str:
     the normal sibling-concatenation loop in ``_join_emitted`` once this
     function returns, so the reconstructed text is the same either way.
     """
-    nary_pr = _find(elem, "naryPr")
-    chr_el = _find(nary_pr, "chr") if nary_pr is not None else None
-    # A present m:chr with no m:val is a different, narrower case: ISO/IEC
-    # 29500 treats that as the character being absent, not "use the default"
-    # (the default applies only when m:chr/m:naryPr is missing outright), so it
-    # falls through to the "unsupported operator" raise below rather than
-    # silently becoming a summation. This mirrors _emit_accent exactly.
-    char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else OMML_IMPLIED_NARY_CHAR
-    name = NARY_NAMES.get(char or "")
+    char = _property_char(_find(elem, "naryPr"), OMML_IMPLIED_NARY_CHAR, "m:nary")
+    name = NARY_NAMES.get(char)
     if name is None:
         raise OmmlConversionError(f"omml_to_text does not support the m:nary operator {char!r}")
     sub, sup = _find(elem, "sub"), _find(elem, "sup")
@@ -877,26 +898,9 @@ def _emit_nary(elem: etree._Element) -> str:
     return f"{name}({_emit_children(sub)},{_emit_children(sup)})" + operand
 
 
-# ISO/IEC 29500's CT_AccPr defines U+0302 COMBINING CIRCUMFLEX ACCENT (hat) as
-# the accent's value when m:accPr — or its m:chr child — is omitted entirely;
-# m:accPr is itself minOccurs="0" in CT_Acc. That is the format's own
-# documented default, not this converter guessing, so an absent property is
-# honored rather than rejected. In practice this branch serves third-party or
-# hand-authored OMML: MathFmt's own writer and Office's MML2OMML.XSL both
-# always write m:chr explicitly, even for hat.
-_DEFAULT_ACCENT_CHAR = OMML_ACCENT_CHARS[ACCENT_CHARS["hat"]]
-
-
 def _emit_accent(elem: etree._Element) -> str:
-    acc_pr = _find(elem, "accPr")
-    chr_el = _find(acc_pr, "chr") if acc_pr is not None else None
-    # A present m:chr with no m:val is a different, narrower case: ISO/IEC
-    # 29500 treats that as the character being absent, not "use the default"
-    # (the default applies only when m:chr/m:accPr is missing outright), so
-    # it falls through to the same "unsupported character" raise below rather
-    # than silently becoming hat.
-    char = chr_el.get(qname(M_NS, "val")) if chr_el is not None else _DEFAULT_ACCENT_CHAR
-    name = ACCENT_NAMES.get(char or "")
+    char = _property_char(_find(elem, "accPr"), DEFAULT_OMML_ACCENT, "m:acc")
+    name = ACCENT_NAMES.get(char)
     if name is None:
         raise OmmlConversionError(f"omml_to_text does not support the accent character {char!r}")
     return f"accent({_emit_children(_require(elem, 'e'))},{name})"

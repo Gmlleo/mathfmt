@@ -1717,9 +1717,9 @@ git commit -m "docs: document the LaTeX input subset for v1.3"
 
 ---
 
-## Carried cleanups (from Task 4's code review — fold into any later task touching these files)
+## Carried cleanups (from Task 4's code review) — DONE, 2026-09-05
 
-Approved without must-fixes; none of these block. In the reviewer's priority order:
+All six landed together after the v1.3.0 release; see the commit `chore(omml): clear the six carried cleanups from Task 4's review`. Kept here for the reasoning. In the reviewer's original priority order:
 
 1. **`tests/test_omml.py`** — `test_accent_round_trips_through_omml_to_text` duplicates `test_every_accent_kind_survives_the_full_round_trip` exactly (same five kinds, only the base letters differ). Delete the former and parametrize the survivor over the table — `@pytest.mark.parametrize("kind", list(ACCENT_CHARS))` — to keep the auto-extending property while regaining per-case failure names.
 2. **`accents.py`** — move `_DEFAULT_ACCENT_CHAR` there as `DEFAULT_OMML_ACCENT = OMML_ACCENT_CHARS[ACCENT_CHARS["hat"]]`, under the comment that already states the spec fact, and import it into `omml.py`. The derivation currently sits in `omml.py`, where the two-step `name → spacing → combining` chain crosses key spaces the module names ambiguously, and states the spec fact a second time. A rename of the `hat` row would also fail at import time — acceptable three lines from the table, worse in `omml.py`.
