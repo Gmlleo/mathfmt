@@ -4,6 +4,26 @@ All notable changes to MathFmt are documented here.
 
 ## [Unreleased]
 
+### Added
+- **`mathfmt gui` previews and edits each formula before converting.** Every
+  candidate in the review list now renders as a real equation, with its
+  parser-ready text in an editable field; editing the text and clicking away
+  re-renders it, or shows the parse error and hint inline while keeping the
+  last good rendering visible but dimmed. What you leave in the field is what
+  gets converted. The server re-parses every edit, so a bad one is reported in
+  the conversion's skipped list rather than written into the document, and
+  clearing a field falls back to the scanned text rather than converting an
+  empty formula.
+  This is what makes v1.3's medium-confidence LaTeX candidates reviewable
+  without leaving the GUI to hand-edit `candidates.json`.
+  Previews need a browser with MathML support (every current Chromium, Firefox
+  and Safari has it); without it the page says so once and falls back to the
+  linear text, with editing and validation unaffected.
+- New `POST /preview/<token>` route on the GUI server, and two new fields
+  (`linear`, `mathml`) on each candidate in the `/scan` response. The `/apply`
+  selection payload accepts `{"selected", "linear"}` alongside the bare boolean
+  it has taken since v1.2.
+
 ### Changed
 - The `dev` extra pins ruff to one minor series (`ruff>=0.16,<0.17`) instead of
   `ruff>=0.6`. Ruff is pre-1.0, so its formatter's stable style may change in

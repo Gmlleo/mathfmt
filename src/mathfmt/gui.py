@@ -21,16 +21,22 @@ import tempfile
 import threading
 import time
 import webbrowser
+from collections.abc import Mapping
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from lxml import etree
+
 from ._version import __version__
-from .core import apply_docx, scan_docx
+from .core import FormulaError, apply_docx, formula_to_mathml, scan_docx
 
 _MAX_UPLOAD_BYTES = 128 * 1024 * 1024
 _MAX_SELECTION_BYTES = 2 * 1024 * 1024
+# One formula, not a document. Generous for any real equation, small enough
+# that a stray upload to this route is rejected before it is parsed.
+_MAX_PREVIEW_BYTES = 64 * 1024
 _SESSION_TTL_SECONDS = 30 * 60
 _DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _PARAGRAPH_PREVIEW_LIMIT = 160
@@ -104,6 +110,54 @@ class _Server(ThreadingHTTPServer):
         self.max_upload_bytes = _MAX_UPLOAD_BYTES
 
 
+def _mathml_for(candidate: Mapping[str, object]) -> str | None:
+    """Serialized MathML for a candidate, or ``None`` when it does not parse.
+
+    A preview is not a gate: a candidate that fails here is still listed, with
+    the ``parse_status`` and hint the scan already produced. ``None`` rather
+    than ``""`` so the page can tell "no preview available" from "an empty
+    formula".
+
+    Parses ``linear``, never ``source`` — the delimiters of ``$x^2+1$`` are
+    stripped for the parser, and previewing ``source`` would fail on them.
+    """
+    if candidate.get("parse_status") != "ok":
+        return None
+    linear = str(candidate.get("linear") or candidate.get("source") or "")
+    if not linear:
+        return None
+    try:
+        return etree.tostring(formula_to_mathml(linear), encoding="unicode")
+    except FormulaError:
+        return None
+
+
+def _apply_selection_entry(candidate: dict[str, object], entry: object) -> None:
+    """Fold one page-supplied selection entry into a scanned candidate.
+
+    Two shapes, because the page gained inline editing after the payload was
+    designed: a bare boolean (v1.2, still valid) or ``{"selected", "linear"}``.
+
+    An edited ``linear`` is written straight into the review — which is exactly
+    the hand-edited ``candidates.json`` flow ``apply_docx`` has supported since
+    v0.3, so the conversion side needs no new logic and an edit that does not
+    parse is already reported through ``skipped``. It is *not* trusted, either:
+    ``apply_docx`` re-parses it, so a client that skipped the preview cannot
+    smuggle anything past the parser.
+
+    A blank edit falls back to the scanned text. Clearing the field is not a
+    way to delete a candidate, and converting an empty formula is never what
+    the reader meant.
+    """
+    if not isinstance(entry, dict):
+        candidate["selected"] = bool(entry)
+        return
+    candidate["selected"] = bool(entry.get("selected"))
+    edited = entry.get("linear")
+    if isinstance(edited, str) and edited.strip():
+        candidate["linear"] = edited.strip()
+
+
 def _truncate(text: str, limit: int) -> str:
     text = text or ""
     if len(text) <= limit:
@@ -140,6 +194,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if len(segments) == 2 and segments[0] == "apply":
             self._handle_apply(segments[1])
+            return
+        if len(segments) == 2 and segments[0] == "preview":
+            self._handle_preview(segments[1])
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -183,6 +240,8 @@ class _Handler(BaseHTTPRequestHandler):
             {
                 "id": c.get("id"),
                 "source": c.get("source", ""),
+                "linear": c.get("linear") or c.get("source", ""),
+                "mathml": _mathml_for(c),
                 "context": _truncate(c.get("paragraph_text", ""), _PARAGRAPH_PREVIEW_LIMIT),
                 "confidence": c.get("confidence"),
                 "confidence_reason": c.get("confidence_reason"),
@@ -200,6 +259,55 @@ class _Handler(BaseHTTPRequestHandler):
             "stem": Path(filename).stem or "output",
             "candidates": candidates,
         }
+
+    # -- preview: render one formula for the review page -----------------------
+
+    def _handle_preview(self, token: str) -> None:
+        """Render one linear formula as MathML, for the page's live preview.
+
+        A formula that does not parse answers 200 with ``ok: false`` and the
+        error: it is a normal answer to a valid request, not a transport
+        failure, and an HTTP error status would make the page fish the body out
+        of an exception. The 4xx statuses here are reserved for the request
+        being wrong — an expired session, or a body too large to be a formula.
+        """
+        if self.server.sessions.get(token) is None:
+            self.close_connection = True
+            self._json_error(HTTPStatus.NOT_FOUND, "会话已失效，请重新上传文件")
+            return
+
+        length = self._read_content_length()
+        if length is None:
+            return
+        if length > _MAX_PREVIEW_BYTES:
+            self.close_connection = True
+            self._json_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "公式文本过长")
+            return
+
+        try:
+            linear = self.rfile.read(length).decode("utf-8").strip()
+        except UnicodeDecodeError:
+            self._json_error(HTTPStatus.BAD_REQUEST, "公式文本必须是 UTF-8")
+            return
+
+        if not linear:
+            self._json_response(HTTPStatus.OK, {"ok": False, "error": "公式不能为空", "hint": None})
+            return
+
+        try:
+            mathml = etree.tostring(formula_to_mathml(linear), encoding="unicode")
+        except FormulaError as error:
+            details = error.to_dict()
+            self._json_response(
+                HTTPStatus.OK,
+                {
+                    "ok": False,
+                    "error": str(details.get("message", "")),
+                    "hint": details.get("hint"),
+                },
+            )
+            return
+        self._json_response(HTTPStatus.OK, {"ok": True, "mathml": mathml})
 
     # -- apply: convert the reviewed selection for an existing scan session ----
 
@@ -265,7 +373,7 @@ class _Handler(BaseHTTPRequestHandler):
             for candidate in review.get("candidates", []):
                 candidate_id = candidate.get("id")
                 if candidate_id in selection:
-                    candidate["selected"] = bool(selection[candidate_id])
+                    _apply_selection_entry(candidate, selection[candidate_id])
             review_path.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
 
             result = apply_docx(
@@ -465,6 +573,12 @@ PAGE_HTML = f"""<!doctype html>
   .badge.low {{ background: #f2f0ea; color: #767267; }}
   .badge.warn {{ background: #fde8e8; color: #a12222; }}
   .candidate.parse-warn .source {{ color: #a12222; }}
+  .candidate .linear-edit {{ width: 100%; margin-top: .3rem; padding: .25rem .4rem; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; border: 1px solid #ddd8cc; border-radius: 4px; background: #fff; color: inherit; box-sizing: border-box; }}
+  .candidate .linear-edit:focus {{ outline: 2px solid #8f7ff0; outline-offset: -1px; }}
+  .candidate .preview {{ margin-top: .3rem; font-size: 1.05rem; overflow-x: auto; }}
+  .candidate .preview.stale {{ opacity: .4; }}
+  .candidate .edit-error {{ font-size: .76rem; color: #a12222; margin-top: .15rem; }}
+  #mathml-note {{ font-size: .78rem; color: #8a7f5f; padding: .4rem .8rem; }}
   #options {{ display: flex; gap: 1.25rem; align-items: center; margin: 1rem 0; font-size: .85rem; flex-wrap: wrap; }}
   #apply-btn {{
     border: none; border-radius: 8px; background: #6b5bd6; color: #fff; padding: .6rem 1.2rem;
@@ -494,6 +608,9 @@ PAGE_HTML = f"""<!doctype html>
     #candidate-list {{ background: #23242c; border-color: #35374a; }}
     .candidate {{ border-color: #2c2e38; }}
     .candidate .context {{ color: #999; }}
+    .candidate .linear-edit {{ background: #1c1d24; border-color: #46485a; }}
+    .candidate .edit-error {{ color: #ff9d9d; }}
+    #mathml-note {{ color: #b3a77f; }}
     .badge {{ background: #262a3f; color: #aab6ff; }}
     .badge.medium {{ background: #3a2f10; color: #e3b463; }}
     .badge.low {{ background: #2d2f38; color: #aaa; }}
@@ -529,6 +646,7 @@ PAGE_HTML = f"""<!doctype html>
       </span>
       <span id="candidate-count"></span>
     </div>
+    <p id="mathml-note" hidden>当前浏览器不支持 MathML，下方不显示公式预览。编辑与校验仍然可用。</p>
     <div id="candidate-list"></div>
     <div id="options">
       <label><input type="checkbox" id="strict"> 严格模式（任一已选公式失败则不写出文件）</label>
@@ -552,6 +670,7 @@ PAGE_HTML = f"""<!doctype html>
   var statusEl = document.getElementById('status');
   var reviewEl = document.getElementById('review');
   var listEl = document.getElementById('candidate-list');
+  var noteEl = document.getElementById('mathml-note');
   var countEl = document.getElementById('candidate-count');
   var applyBtn = document.getElementById('apply-btn');
   var resetBtn = document.getElementById('reset-btn');
@@ -582,21 +701,125 @@ PAGE_HTML = f"""<!doctype html>
     return '低';
   }}
 
+  // MathML enters the DOM as XML, never through innerHTML. Every other value
+  // this page inserts is escaped; MathML is the only one that must stay
+  // markup, and parsing it as XML keeps server-supplied document text away
+  // from the HTML parser entirely - so event-handler attributes and script
+  // elements have no way in, whatever the source document contained.
+  // A FormulaError's message carries a snippet and a caret line aligned for a
+  // monospace terminal. In a proportional div the caret points at nothing, so
+  // the whole message is shown on one line.
+  function oneLine(text) {{
+    return String(text == null ? '' : text).replace(/\\s+/g, ' ').trim();
+  }}
+
+  function mathmlNode(xml) {{
+    if (!xml) return null;
+    var doc = new DOMParser().parseFromString(xml, 'application/xml');
+    if (doc.querySelector('parsererror')) return null;
+    return document.importNode(doc.documentElement, true);
+  }}
+
+  // One probe at startup, not one per row: render a fraction and a bare number
+  // off-screen and compare heights. A browser without MathML lays the
+  // fraction's operands out inline, so the two boxes come out the same height.
+  var mathmlSupported = (function () {{
+    var frac = mathmlNode('<math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac><mn>1</mn><mn>2</mn></mfrac></math>');
+    var flat = mathmlNode('<math xmlns="http://www.w3.org/1998/Math/MathML"><mn>1</mn></math>');
+    if (!frac || !flat) return false;
+    var probe = document.createElement('div');
+    probe.style.cssText = 'position:absolute;visibility:hidden;left:-9999px;top:0;';
+    probe.appendChild(frac);
+    probe.appendChild(document.createElement('br'));
+    probe.appendChild(flat);
+    document.body.appendChild(probe);
+    var supported = frac.getBoundingClientRect().height > flat.getBoundingClientRect().height * 1.5;
+    document.body.removeChild(probe);
+    return supported;
+  }})();
+
+  function setPreview(row, xml) {{
+    var slot = row.querySelector('.preview');
+    slot.classList.remove('stale');
+    slot.replaceChildren();
+    if (!xml || !mathmlSupported) return;
+    var node = mathmlNode(xml);
+    if (node) slot.appendChild(node);
+  }}
+
+  function renderPreviews() {{
+    if (!mathmlSupported) noteEl.hidden = false;
+    listEl.querySelectorAll('.candidate').forEach(function (row) {{
+      var id = row.getAttribute('data-id');
+      var c = scanState.candidates.find(function (x) {{ return x.id === id; }});
+      setPreview(row, c ? c.mathml : null);
+    }});
+  }}
+
+  // Blur, not keystroke: each preview is a real parse on a single-threaded
+  // server, and a 200-candidate document typed through would be a request
+  // storm. `seq` discards a slow earlier response that lands after a newer one.
+  var previewSeq = 0;
+  var rowSeq = Object.create(null);
+
+  function requestPreview(row) {{
+    var id = row.getAttribute('data-id');
+    var field = row.querySelector('.linear-edit');
+    var errorEl = row.querySelector('.edit-error');
+    var linear = field.value;
+    var candidate = scanState.candidates.find(function (x) {{ return x.id === id; }});
+    if (!candidate || linear === candidate.linear) return;
+    candidate.linear = linear;
+
+    var seq = ++previewSeq;
+    rowSeq[id] = seq;
+    fetch('/preview/' + encodeURIComponent(scanState.token), {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'text/plain; charset=utf-8' }},
+      body: linear
+    }}).then(function (resp) {{ return resp.json(); }}).then(function (data) {{
+      if (rowSeq[id] !== seq) return;
+      if (data.ok) {{
+        candidate.mathml = data.mathml;
+        errorEl.textContent = '';
+        row.classList.remove('parse-warn');
+        setPreview(row, data.mathml);
+      }} else {{
+        // Keep the last good picture, dimmed, rather than blanking it: the
+        // reader is mid-edit, and an empty box says less than a stale one.
+        errorEl.textContent = oneLine(data.error) + (data.hint ? '（' + data.hint + '）' : '');
+        row.classList.add('parse-warn');
+        var slot = row.querySelector('.preview');
+        if (slot.firstChild) slot.classList.add('stale');
+      }}
+    }}).catch(function () {{
+      if (rowSeq[id] !== seq) return;
+      errorEl.textContent = '预览失败，请重试';
+    }});
+  }}
+
   function candidateRowHtml(c) {{
     var warn = c.parse_status && c.parse_status !== 'ok';
     var badges = '<span class="badge ' + escapeHtml(c.confidence || 'low') + '">' +
       confidenceLabel(c.confidence) + '置信度</span>';
     if (warn) badges += '<span class="badge warn">解析失败</span>';
     var note = warn
-      ? escapeHtml(c.parse_error || '无法解析，转换时会跳过') + (c.parse_hint ? '（' + escapeHtml(c.parse_hint) + '）' : '')
+      ? escapeHtml(oneLine(c.parse_error) || '无法解析，转换时会跳过') + (c.parse_hint ? '（' + escapeHtml(c.parse_hint) + '）' : '')
       : escapeHtml(c.confidence_reason || '');
+    // A div, not a label: the row now holds a text field, and a wrapping label
+    // would toggle the checkbox on every click into it. The source line keeps
+    // click-to-toggle through an explicit `for`.
+    var checkId = 'chk-' + escapeHtml(c.id);
     return (
-      '<label class="candidate' + (warn ? ' parse-warn' : '') + '" data-id="' + escapeHtml(c.id) + '">' +
-      '<input type="checkbox" class="candidate-check"' + (c.selected ? ' checked' : '') + '>' +
+      '<div class="candidate' + (warn ? ' parse-warn' : '') + '" data-id="' + escapeHtml(c.id) + '">' +
+      '<input type="checkbox" id="' + checkId + '" class="candidate-check"' + (c.selected ? ' checked' : '') + '>' +
       '<span class="body">' +
-      '<div class="source">' + badges + escapeHtml(c.source) + '</div>' +
+      '<label class="source" for="' + checkId + '">' + badges + escapeHtml(c.source) + '</label>' +
       '<div class="context">' + note + '</div>' +
-      '</span></label>'
+      '<input type="text" class="linear-edit" spellcheck="false" aria-label="formula text" value="' + escapeHtml(c.linear || '') + '">' +
+      '<div class="preview"></div>' +
+      '<div class="edit-error"></div>' +
+      '</span></div>'
     );
   }}
 
@@ -608,6 +831,7 @@ PAGE_HTML = f"""<!doctype html>
       return;
     }}
     listEl.innerHTML = candidates.map(candidateRowHtml).join('');
+    renderPreviews();
     reviewEl.hidden = false;
     resultEl.hidden = true;
     setStatus('已扫描：' + scanState.filename + '，请勾选要转换的公式', false);
@@ -643,7 +867,10 @@ PAGE_HTML = f"""<!doctype html>
     var selection = {{}};
     listEl.querySelectorAll('.candidate').forEach(function (row) {{
       var id = row.getAttribute('data-id');
-      selection[id] = row.querySelector('.candidate-check').checked;
+      selection[id] = {{
+        selected: row.querySelector('.candidate-check').checked,
+        linear: row.querySelector('.linear-edit').value
+      }};
     }});
     return selection;
   }}
@@ -766,6 +993,9 @@ PAGE_HTML = f"""<!doctype html>
 
   listEl.addEventListener('change', function (e) {{
     if (e.target.classList.contains('candidate-check')) updateCount();
+  }});
+  listEl.addEventListener('focusout', function (e) {{
+    if (e.target.classList.contains('linear-edit')) requestPreview(e.target.closest('.candidate'));
   }});
   document.querySelectorAll('.chip').forEach(function (chip) {{
     chip.addEventListener('click', function () {{ applyPreset(chip.getAttribute('data-preset')); }});

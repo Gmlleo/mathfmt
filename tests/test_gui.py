@@ -6,12 +6,14 @@ import shutil
 import threading
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from mathfmt import cli, gui
+from mathfmt.core import M_NS, W_NS
 from tests.helpers import make_docx, make_fake_xsl
 
 
@@ -56,7 +58,7 @@ def _post_scan(
 def _post_apply(
     base_url: str,
     token: str,
-    selection: dict[str, bool],
+    selection: dict[str, object],
     *,
     strict: bool = False,
     stem: str = "output",
@@ -405,3 +407,264 @@ def test_cli_gui_command_uses_explicit_xsl(tmp_path: Path, monkeypatch: pytest.M
 
     assert cli.main(["gui", "--no-browser", "--xsl", str(xsl)]) == 0
     assert calls["xsl_path"] == xsl.resolve()
+
+
+def _document_with(*paragraphs: str) -> str:
+    body = "".join(f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paragraphs)
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<w:document xmlns:w="{W_NS}" xmlns:m="{M_NS}"><w:body>{body}</w:body></w:document>'
+    )
+
+
+def _scan_one(tmp_path: Path, base_url: str, paragraph: str) -> dict[str, object]:
+    """Scan a one-paragraph document and return its first candidate."""
+    source = make_docx(tmp_path / "preview.docx", document_xml=_document_with(paragraph))
+    status, payload = _post_scan(base_url, source)
+    assert status == 200
+    candidates = [c for c in payload["candidates"] if c["source"]]
+    assert candidates, "the paragraph produced no candidate"
+    return candidates[0]
+
+
+def test_scan_returns_linear_and_mathml_for_each_candidate(tmp_path: Path, running_server: Any) -> None:
+    # The page needs the parser-ready text to seed its editor, and the MathML to
+    # show what the formula will look like. Both come from the scan response so
+    # the first render costs no extra round trip.
+    base_url, _ = running_server
+    candidate = _scan_one(tmp_path, base_url, "公式 $x^2 + 1$ 在此。")
+
+    assert candidate["source"] == "$x^2 + 1$"
+    # `linear`, not `source`: the delimiters are stripped for the parser, and a
+    # preview built from `source` would fail on the dollar signs.
+    assert candidate["linear"] == "x^2 + 1"
+    assert str(candidate["mathml"]).startswith("<math")
+    assert "msup" in str(candidate["mathml"])
+
+
+def test_scan_sends_no_mathml_for_an_unparseable_candidate(tmp_path: Path, running_server: Any) -> None:
+    # A preview is not a gate: the candidate is still listed with its existing
+    # parse_status and hint. None rather than "" so the page can tell "no
+    # preview available" from "an empty formula".
+    base_url, _ = running_server
+    candidate = _scan_one(tmp_path, base_url, "坏公式 $x = +$ 在此。")
+
+    assert candidate["parse_status"] != "ok"
+    assert candidate["mathml"] is None
+    assert candidate["linear"] == "x = +"
+
+
+def _post_preview(base_url: str, token: str, linear: str) -> tuple[int, dict[str, object]]:
+    request = urllib.request.Request(
+        f"{base_url}/preview/{token}",
+        data=linear.encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "text/plain; charset=utf-8"},
+    )
+    try:
+        with urllib.request.urlopen(request) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def _token_for(tmp_path: Path, base_url: str) -> str:
+    source = make_docx(tmp_path / "session.docx", document_xml=_document_with("公式 $x^2$ 在此。"))
+    status, payload = _post_scan(base_url, source)
+    assert status == 200
+    return str(payload["token"])
+
+
+def test_preview_renders_a_valid_formula(tmp_path: Path, running_server: Any) -> None:
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, payload = _post_preview(base_url, token, "(a+b)/c")
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert str(payload["mathml"]).startswith("<math")
+    assert "mfrac" in str(payload["mathml"])
+
+
+def test_preview_reports_a_parse_error_without_failing_the_request(
+    tmp_path: Path, running_server: Any
+) -> None:
+    # A formula that does not parse is a normal answer to a valid request, not a
+    # transport failure — the page needs the error text, and an HTTP error
+    # status would make it fish the body out of an exception instead.
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, payload = _post_preview(base_url, token, "x +")
+
+    assert status == 200
+    assert payload["ok"] is False
+    assert payload["error"]
+    assert "operand is missing" in str(payload["hint"])
+
+
+def test_preview_names_an_unsupported_latex_macro(tmp_path: Path, running_server: Any) -> None:
+    # v1.3's rejection path reaching the GUI unchanged: the reader is told which
+    # macro is unsupported, not that a backslash is unrecognized.
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, payload = _post_preview(base_url, token, r"\substack{a}")
+
+    assert status == 200
+    assert payload["ok"] is False
+    assert "substack" in str(payload["error"])
+    assert "section 10" in str(payload["hint"])
+
+
+def test_preview_expands_a_supported_latex_macro(tmp_path: Path, running_server: Any) -> None:
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, payload = _post_preview(base_url, token, r"\frac{a}{b}")
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert "mfrac" in str(payload["mathml"])
+
+
+def test_preview_rejects_an_unknown_session(running_server: Any) -> None:
+    # A token is only ever issued by /scan, and expires with the session. That
+    # is what keeps this from being an open formula compiler on 127.0.0.1.
+    base_url, _ = running_server
+
+    status, payload = _post_preview(base_url, "not-a-real-token", "x^2")
+
+    assert status == 404
+    assert payload["error"]
+
+
+def test_preview_rejects_an_oversized_body(tmp_path: Path, running_server: Any) -> None:
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, _ = _post_preview(base_url, token, "x" * (gui._MAX_PREVIEW_BYTES + 1))
+
+    assert status == 413
+
+
+def test_preview_rejects_an_empty_formula(tmp_path: Path, running_server: Any) -> None:
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, payload = _post_preview(base_url, token, "   ")
+
+    assert status == 200
+    assert payload["ok"] is False
+
+
+def _apply_and_read_document(
+    tmp_path: Path, base_url: str, paragraph: str, selection_for: Any
+) -> tuple[dict[str, object], str]:
+    """Scan one paragraph, apply `selection_for(candidate)`, return the output XML."""
+    source = make_docx(tmp_path / "edit.docx", document_xml=_document_with(paragraph))
+    status, scanned = _post_scan(base_url, source)
+    assert status == 200
+    candidate = next(c for c in scanned["candidates"] if c["source"])
+    token = str(scanned["token"])
+
+    status, applied = _post_apply(base_url, token, {candidate["id"]: selection_for(candidate)})
+    assert status == 200
+
+    document = ""
+    if applied.get("output_available"):
+        with urllib.request.urlopen(f"{base_url}/download/{token}") as resp:
+            archive = zipfile.ZipFile(io.BytesIO(resp.read()))
+            document = archive.read("word/document.xml").decode("utf-8")
+    return applied, document
+
+
+def test_apply_writes_an_edited_linear_into_the_output(tmp_path: Path, running_server: Any) -> None:
+    # The point of the feature: what the reader typed is what gets converted,
+    # not what the scanner found.
+    base_url, _ = running_server
+    applied, document = _apply_and_read_document(
+        tmp_path,
+        base_url,
+        "公式 $x^2$ 在此。",
+        lambda c: {"selected": True, "linear": "(a+b)/c"},
+    )
+
+    assert applied["converted"] == 1
+    assert "oMath" in document
+    assert "<m:den>" in document or "m:den" in document
+
+
+def test_apply_still_accepts_a_bare_boolean_selection(tmp_path: Path, running_server: Any) -> None:
+    # The v1.2 payload shape stays valid — every pre-existing test in this file
+    # sends bare booleans and must keep passing untouched.
+    base_url, _ = running_server
+    applied, document = _apply_and_read_document(tmp_path, base_url, "公式 $x^2$ 在此。", lambda c: True)
+
+    assert applied["converted"] == 1
+    assert "oMath" in document
+
+
+def test_apply_reports_an_edited_linear_that_does_not_parse(tmp_path: Path, running_server: Any) -> None:
+    # The page previews before sending, but the server never trusts it: the
+    # edit is re-parsed here. A bad edit is reported through the existing
+    # `skipped` channel rather than failing the whole request.
+    base_url, _ = running_server
+    applied, _ = _apply_and_read_document(
+        tmp_path,
+        base_url,
+        "公式 $x^2$ 在此。",
+        lambda c: {"selected": True, "linear": "x +"},
+    )
+
+    assert applied["converted"] == 0
+    assert applied["skipped"] == 1
+    assert applied["skipped_items"]
+    assert applied["skipped_items"][0]["reason"]
+
+
+def test_apply_ignores_a_blank_edit_and_keeps_the_scanned_text(tmp_path: Path, running_server: Any) -> None:
+    # Clearing the field is not a way to delete a candidate — it falls back to
+    # what the scanner found rather than converting an empty formula.
+    base_url, _ = running_server
+    applied, document = _apply_and_read_document(
+        tmp_path,
+        base_url,
+        "公式 $x^2$ 在此。",
+        lambda c: {"selected": True, "linear": "   "},
+    )
+
+    assert applied["converted"] == 1
+    assert "oMath" in document
+
+
+def test_page_parses_mathml_as_xml_and_never_through_innerhtml(running_server: Any) -> None:
+    # A regression guard for a security decision, not a rendering test: this
+    # suite drives HTTP, not a browser. Every other value the page inserts is
+    # escaped; MathML is the only one that must stay markup, so it goes through
+    # DOMParser + importNode. Routing it through innerHTML instead would put
+    # server-supplied document text on the other side of the HTML parser for
+    # the first time in this file.
+    base_url, _ = running_server
+    with urllib.request.urlopen(f"{base_url}/") as resp:
+        page = resp.read().decode("utf-8")
+
+    assert "DOMParser" in page
+    assert "document.importNode" in page
+    assert "parsererror" in page  # a malformed preview is dropped, not injected
+    assert ".innerHTML = data.mathml" not in page
+    assert "innerHTML = c.mathml" not in page
+
+
+def test_page_offers_an_editable_field_and_a_preview_slot(running_server: Any) -> None:
+    base_url, _ = running_server
+    with urllib.request.urlopen(f"{base_url}/") as resp:
+        page = resp.read().decode("utf-8")
+
+    assert "linear-edit" in page
+    assert "focusout" in page  # blur-triggered, not per keystroke
+    assert "mathml-note" in page  # the no-MathML fallback notice
+    # The row must not be a <label>: it now contains a text field, and a
+    # wrapping label would toggle the checkbox on every click into it.
+    assert "'<label class=\"candidate" not in page
