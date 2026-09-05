@@ -1447,6 +1447,7 @@ def formula_to_mathml(
     source: str,
     aliases: Mapping[str, str] | None = None,
 ) -> etree._Element:
+    source = _expanded_latex(source)
     if not (aliases and source.strip() in aliases):
         chemistry = _try_chemistry_mathml(source)
         if chemistry is not None:
@@ -1458,8 +1459,30 @@ def formula_to_mathml(
     return root
 
 
+def _expanded_latex(source: str) -> str:
+    """``source`` with its LaTeX macros expanded, or unchanged if it has none.
+
+    The import is function-local: ``latex`` imports this module for its error
+    type, so a module-scope import here would close the cycle.
+
+    Expansion happens at both of the module's two entry points for formula
+    text — here for the whole formula, and in
+    :func:`split_multiline_formula` for text that may still be several rows —
+    so that everything downstream of either only ever sees linear syntax.
+    """
+    from .latex import contains_latex_macro, expand_latex
+
+    return expand_latex(source) if contains_latex_macro(source) else source
+
+
 def split_multiline_formula(source: str) -> list[str]:
-    """Split reviewed formula text on LaTeX ``\\\\`` or real line breaks."""
+    """Split reviewed formula text on LaTeX ``\\\\`` or real line breaks.
+
+    LaTeX is expanded before the split, not after: an ``aligned`` environment's
+    rows are only separators once the environment around them is gone, and
+    splitting first would hand each half an unbalanced ``\\begin``/``\\end``.
+    """
+    source = _expanded_latex(source)
     lines = re.split(r"\\\\|\r\n?|\n", source)
     if len(lines) == 1:
         return [source]

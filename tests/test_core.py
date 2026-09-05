@@ -534,3 +534,41 @@ def test_sqrt_with_single_element_bracket_still_works() -> None:
     # a "group" node here (not "vector") and is unaffected by the Task 5c
     # fix -- confirm it still works.
     assert "msqrt" in local_tags("sqrt[x]")
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (r"\frac{a}{b}", "mfrac"),
+        (r"\sqrt[3]{x}", "mroot"),
+        (r"\bar{x}", "mover"),
+        (r"\alpha + \beta", "mi"),
+        (r"\sum_{i=1}^{n} i", "mrow"),
+        (r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}", "mtable"),
+        (r"\text{已知} x", "mtext"),
+        (r"\begin{cases} 0 & x<0 \\ 1 & x \geq 0 \end{cases}", "mtable"),
+    ],
+)
+def test_latex_input_reaches_mathml(source: str, expected: str) -> None:
+    assert expected in local_tags(source)
+
+
+def test_unsupported_latex_macro_raises_formula_error() -> None:
+    with pytest.raises(FormulaError):
+        formula_to_mathml(r"\substack{a}")
+
+
+def test_a_formula_with_no_macro_never_reaches_the_expander() -> None:
+    # The expander runs only when a known macro is present, so ordinary linear
+    # formulas — and the backslash-bearing text that is not LaTeX at all — are
+    # unaffected by the wiring.
+    assert "mfrac" in local_tags("(a)/(b)")
+    with pytest.raises(FormulaError):
+        formula_to_mathml(r"C:\Users\gml85")
+
+
+def test_an_aligned_environment_keeps_its_rows_for_the_multiline_splitter() -> None:
+    # formula_to_mathml renders one formula, so the row separators an aligned
+    # environment produces are the multiline splitter's business, not its own.
+    # This pins that the expansion reaches that splitter intact.
+    assert split_multiline_formula(r"\begin{aligned} a=b \\ c=d \end{aligned}") == ["a=b", "c=d"]
