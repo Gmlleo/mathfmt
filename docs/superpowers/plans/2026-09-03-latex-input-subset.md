@@ -1691,6 +1691,8 @@ Document these three limitations in the same section:
 - `ROADMAP.md`: a v1.3 entry that states plainly that this revises the stable-maintenance policy's "no supported-syntax changes" clause, and why.
 - `src/mathfmt/_version.py`: bump to `1.3.0`.
 
+- **Backend defaults (found during Task 6).** `CLAUDE.md` is already corrected (`dc2b0aa`); check whether `README.md`, `docs/workflow.md`, and `docs/api.md` repeat the same false claim that the Office XSL is used "only when `--xsl` is explicitly passed". The CLI auto-detects it and prefers it (`cli.py:313-317`, and the equivalents near `124`, `455`, `504`), so on a machine with Office the default output does not come from `omml.py` at all — a Task 6 agent was measuring Office's output while believing it was testing the Python backend. The maintainer decided to correct the documentation rather than change the behaviour, which has shipped this way for two releases. State plainly how to force the Python backend, and note that the library default is the opposite of the CLI's.
+
 - [ ] **Step 3: Update the self-update tests**
 
 Run: `grep -rn "1\.2\.0" tests/test_update.py`
