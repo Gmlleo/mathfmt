@@ -141,3 +141,45 @@ def test_every_accent_macro_names_a_real_accent_kind() -> None:
     # would expand cleanly and then fail at parse time with an error pointing
     # at the expanded text rather than at the macro the author wrote.
     assert set(ACCENT_MACROS.values()) <= set(ACCENT_CHARS)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (r"\sum_{i=1}^{n} i", "sum(i=1,n) i"),
+        (r"\int_{a}^{b} f", "int(a,b) f"),
+        (r"\prod_{k=1}^{m} k", "prod(k=1,m) k"),
+        (r"\lim_{x \to 0} f", "lim(x→0) f"),
+        (r"x_{i}^{2}", "x_(i)^(2)"),
+        (r"x^{n+1}", "x^(n+1)"),
+        (r"\sum_{i=1}^{n} \frac{1}{i}", "sum(i=1,n) (1)/(i)"),
+    ],
+)
+def test_limits_and_scripts_expand(source: str, expected: str) -> None:
+    assert expand_latex(source).replace(" ", "") == expected.replace(" ", "")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # A bound holding parentheses: the binder cannot span them.
+        r"\sum_{i=1}^{f(n)} i",
+        # Only one of the two bounds.
+        r"\sum_{i=1} i",
+        r"\int^{b} f",
+        r"\prod_{k=1} k",
+    ],
+)
+def test_an_unbound_large_operator_is_rejected_not_left_as_an_identifier(source: str) -> None:
+    # Left unbound, `sum_(i=1)` parses as a plain identifier with a subscript
+    # and renders the letters "sum" in the document — a wrong equation that
+    # looks converted. Refusing keeps it a reviewable candidate instead.
+    with pytest.raises(FormulaError) as excinfo:
+        expand_latex(source)
+    assert excinfo.value.to_dict()["hint"]
+
+
+def test_a_large_operator_without_limits_is_left_alone() -> None:
+    # No scripts at all is not the failure case: `\lim f` is ordinary text the
+    # tokenizer already knows, and binding is only owed where a script exists.
+    assert expand_latex(r"\lim f") == "lim f"

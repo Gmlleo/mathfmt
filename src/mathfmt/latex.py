@@ -113,11 +113,18 @@ def contains_latex_macro(text: str) -> bool:
 def expand_latex(source: str) -> str:
     """Expand the supported LaTeX subset into MathFmt linear syntax.
 
-    Two passes, in this order: the argument-taking macros first, because they
-    consume braced groups whose *contents* may themselves be macros, then the
-    single-token symbol substitutions over whatever is left.
+    Four passes, and the order is load-bearing:
+
+    1. the argument-taking macros, which consume braced groups whose contents
+       may themselves be macros;
+    2. ``_{…}``/``^{…}`` into MathFmt's parenthesized script form;
+    3. binding a large operator's scripts into its ``name(lower,upper)`` call,
+       which needs the scripts already parenthesized to find them;
+    4. the single-token symbol substitutions, last, so that ``\\to`` inside
+       ``\\lim_{x \\to 0}`` is still a macro while step 3 moves it.
     """
-    return _expand_symbols(_expand_arguments(source))
+    expanded = _bind_limits(_expand_scripts(_expand_arguments(source)))
+    return _expand_symbols(expanded)
 
 
 def _macro_name(macro: str) -> str:
@@ -242,6 +249,59 @@ def _expand_arguments(source: str) -> str:
         else:
             out.append(match.group())
         index = cursor
+
+
+def _expand_scripts(source: str) -> str:
+    """Turn ``_{…}``/``^{…}`` into MathFmt's parenthesized script form.
+
+    Braces are MathFmt's grouping characters too, so leaving them would often
+    parse — and parse as something else. The rewrite is recursive so a script
+    inside a script keeps its grouping.
+    """
+    out: list[str] = []
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if char in "_^" and index + 1 < len(source) and source[index + 1] == "{":
+            content, index = _read_group(source, index + 1, "{", "}")
+            out.append(f"{char}({_expand_scripts(content)})")
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+NARY_RE = re.compile(r"\b(sum|int|prod)\s*_\(([^()]*)\)\s*\^\(([^()]*)\)")
+LIMIT_RE = re.compile(r"\blim\s*_\(([^()]*)\)")
+# What must never survive _bind_limits: a big operator or lim still carrying a
+# script. `\b` matches after the backslash, so this sees the macro spelling as
+# well as the bare one.
+UNBOUND_RE = re.compile(r"\b(sum|int|prod|lim)\s*[_^]\(")
+
+
+def _bind_limits(source: str) -> str:
+    """Bind a large operator's scripts into its ``name(lower,upper)`` call.
+
+    Refuses rather than leaves one unbound. ``sum``/``int``/``prod``/``lim``
+    only mean the big operator when they are *called*; left as ``sum_(i=1)``
+    the parser reads a bare identifier and Word renders the letters "sum"
+    beside a subscript — a silently wrong equation rather than a reviewable
+    error. Reached by a limit holding parentheses (which the patterns below
+    cannot span) or by only one of the two limits being present.
+    """
+    source = NARY_RE.sub(lambda m: f"{m.group(1)}({m.group(2)},{m.group(3)})", source)
+    source = LIMIT_RE.sub(lambda m: f"lim({m.group(1)})", source)
+    unbound = UNBOUND_RE.search(source)
+    if unbound is not None:
+        raise FormulaError(
+            f"MathFmt cannot read the limits of \\{unbound.group(1)} here — a big operator "
+            "needs both bounds, and a bound may not contain parentheses",
+            position=unbound.start(),
+            expected="a supported LaTeX macro",
+            found=unbound.group(),
+            source=source,
+        )
+    return source
 
 
 def _expand_symbols(source: str) -> str:
