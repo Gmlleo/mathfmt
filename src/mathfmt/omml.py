@@ -882,6 +882,55 @@ def _property_char(parent: etree._Element | None, implied: str, what: str) -> st
     return char
 
 
+# Operators that end MathFmt's `parse_add` (see `Parser.parse_relation` in
+# core.py) — everything at or below relation precedence. An n-ary operand is
+# reconstructed as flat text appended to "sum(a,b)", and the parser binds the
+# body with `parse_add`, so one of these left bare at bracket depth 0 would
+# escape the operator: "sum(i=1,n)a=S" re-parses with a body of "a" and the
+# "= S" outside the summation entirely.
+#
+# Testing for "=", "<" and ">" covers every ASCII spelling `_reverse_operators`
+# produces — "!=", "<=", ">=", "->", "=>" each contain one of them — alongside
+# the Unicode relations that pass through unchanged. "," and ";" are included
+# because they would not merely rebind the body but end the expression.
+# Add-level operators ("+", "-", "±" as "+/-", ...) are deliberately absent:
+# they bind *inside* `parse_add`, so grouping them would put parentheses in the
+# document that the source OMML never had.
+_NARY_OPERAND_ESCAPES = frozenset("=<>,;") | {
+    "⇌",
+    "∈",
+    "∉",
+    "⊂",
+    "⊆",
+    "⊃",
+    "⊇",
+    "∝",
+    "≡",
+    "≅",
+    "~",
+}
+
+_OPEN_BRACKETS = "([{⟨"
+_CLOSE_BRACKETS = ")]}⟩"
+
+
+def _escapes_nary_operand(text: str) -> bool:
+    """True when ``text`` would not re-parse whole as an n-ary operand.
+
+    Only depth-0 occurrences count — anything already inside brackets is
+    protected by them, so ``(a=b)+c`` needs no further grouping.
+    """
+    depth = 0
+    for char in text:
+        if char in _OPEN_BRACKETS:
+            depth += 1
+        elif char in _CLOSE_BRACKETS:
+            depth = max(0, depth - 1)
+        elif depth == 0 and char in _NARY_OPERAND_ESCAPES:
+            return True
+    return False
+
+
 def _emit_nary(elem: etree._Element) -> str:
     """Reconstruct ``m:nary`` as ``name(sub,sup)`` followed by its operand.
 
@@ -894,7 +943,14 @@ def _emit_nary(elem: etree._Element) -> str:
     An ``m:nary`` whose ``m:e`` is empty is still legal (Word writes one for a
     bare ``∑_{i=1}^{n}``); anything following it in the OMML is picked up by
     the normal sibling-concatenation loop in ``_join_emitted`` once this
-    function returns, so the reconstructed text is the same either way.
+    function returns.
+
+    The operand is parenthesized only when leaving it bare would change what
+    it binds to — see :func:`_escapes_nary_operand`. It is not grouped
+    unconditionally the way :func:`_emit_operand` groups a script or fraction
+    slot: an n-ary operand re-parses through ``parse_add``, which already
+    absorbs ordinary arithmetic, so blanket grouping would add parentheses the
+    source OMML never had and change the rendered document.
     """
     char = _property_char(_find(elem, "naryPr"), OMML_IMPLIED_NARY_CHAR, "m:nary")
     name = NARY_NAMES.get(char)
@@ -907,6 +963,8 @@ def _emit_nary(elem: etree._Element) -> str:
         )
     e = _find(elem, "e")
     operand = _emit_children(e) if e is not None else ""
+    if _escapes_nary_operand(operand):
+        operand = f"({operand})"
     return f"{name}({_emit_children(sub)},{_emit_children(sup)})" + operand
 
 

@@ -961,6 +961,44 @@ def test_omml_to_text_rejects_a_valueless_nary_chr() -> None:
         omml_to_text(omath)
 
 
+@pytest.mark.parametrize(
+    ("operand_runs", "expected"),
+    [
+        # A top-level relation ends parse_add, so bare concatenation would let
+        # it escape the operator: "sum(i=1,n)a=S" re-parses with a body of "a"
+        # and the "= S" outside. Group it.
+        (("a", "=", "S"), "sum(i=1,n)(a=S)"),
+        (("x", "<", "y"), "sum(i=1,n)(x<y)"),
+        (("p", "->", "q"), "sum(i=1,n)(p->q)"),
+        # Additive and multiplicative operators bind *inside* parse_add, so
+        # they are safe bare — and grouping them would put real parentheses in
+        # the document that the source OMML never had.
+        (("a", "+", "b"), "sum(i=1,n)a+b"),
+        (("2", "x"), "sum(i=1,n)2x"),
+        (("i",), "sum(i=1,n)i"),
+    ],
+)
+def test_omml_to_text_groups_only_an_nary_operand_that_would_escape(
+    operand_runs: tuple[str, ...], expected: str
+) -> None:
+    omath = etree.Element(qname(M_NS, "oMath"))
+    nary = _word_nary(omath)
+    e = nary.find(qname(M_NS, "e"))
+    assert e is not None
+    for child in list(e):
+        e.remove(child)
+    for text in operand_runs:
+        run = etree.SubElement(e, qname(M_NS, "r"))
+        etree.SubElement(run, qname(M_NS, "t")).text = text
+
+    reconstructed = omml_to_text(omath)
+    assert reconstructed == expected
+    # The whole operand must land back inside m:e, with nothing escaping to a
+    # sibling of the m:nary.
+    round_tripped = mathml_to_omml_py(formula_to_mathml(reconstructed))
+    assert [etree.QName(child).localname for child in round_tripped] == ["nary"]
+
+
 def test_omml_to_text_nary_rejects_unrecognized_operator() -> None:
     omath = etree.Element(qname(M_NS, "oMath"))
     nary = etree.SubElement(omath, qname(M_NS, "nary"))
