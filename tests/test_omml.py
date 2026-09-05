@@ -184,6 +184,16 @@ def test_every_accent_kind_survives_the_full_round_trip() -> None:
         assert omml_to_text(omath_for(source)) == source
 
 
+def test_quoted_text_produces_a_plain_run() -> None:
+    # mtext already maps to a plain (upright) m:r, so the atom needs no OMML
+    # work of its own — this pins that, and that it reverses as its bare
+    # content the way chemistry text does.
+    root = omath_for('"已知"')
+    texts = [t.text for t in root.iter(f"{{{M_NS}}}t")]
+    assert "已知" in texts
+    assert omml_to_text(root) == "已知"
+
+
 def test_accent_converts_compound_base_expression() -> None:
     acc = omath_for("accent(a+b,bar)").find(f".//{{{M_NS}}}acc")
     e = acc.find(f"{{{M_NS}}}e")

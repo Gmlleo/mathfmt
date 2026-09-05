@@ -428,6 +428,39 @@ def test_root_preserves_a_compound_base() -> None:
     assert "".join(mroot[0].itertext()) == "a+b"
 
 
+def test_quoted_text_becomes_mtext() -> None:
+    math = formula_to_mathml('"已知"')
+    mtext = math.find(f".//{{{MML_NS}}}mtext")
+    assert mtext is not None
+    assert mtext.text == "已知"
+
+
+def test_quoted_text_participates_in_a_formula() -> None:
+    assert "mtext" in local_tags('x = 3 "kg"')
+
+
+def test_quoted_text_is_one_token_not_split_by_its_contents() -> None:
+    # The whole point of a text atom is that its contents are not math: a
+    # quoted run holding operators, digits, spaces and commas stays one mtext
+    # rather than being lexed as the expression it resembles.
+    math = formula_to_mathml('"a + 1, b"')
+    assert [etree.QName(el).localname for el in math.iter()][1:] == ["mtext"]
+    assert math.find(f".//{{{MML_NS}}}mtext").text == "a + 1, b"
+
+
+def test_empty_quoted_text_is_an_empty_mtext() -> None:
+    math = formula_to_mathml('x "" y')
+    texts = [el.text for el in math.iter(f"{{{MML_NS}}}mtext")]
+    assert texts == [""]
+
+
+def test_unterminated_quote_is_rejected() -> None:
+    # An opening quote with no closing one must not silently lex as anything
+    # else; a lone " is still untokenizable.
+    with pytest.raises(FormulaError):
+        formula_to_mathml('x "kg')
+
+
 def test_matrix_literal_produces_two_by_two_structure() -> None:
     # Regression for Task 5b: a comma between two digit runs used to lex as a
     # single decimal NUMBER, so [[1,2],[3,4]] silently became a 2x1 matrix of

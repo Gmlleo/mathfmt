@@ -384,6 +384,11 @@ TOKEN_RE = re.compile(
     r"\s*(?:"
     r"(?P<MATRIX_OPEN>\[\[)|"
     r"(?P<MATRIX_CLOSE>\]\])|"
+    # A quoted run is opaque: everything up to the closing quote is text, not
+    # math, so it is matched ahead of NUMBER and IDENT and never split. A lone
+    # opening quote matches nothing here and still raises, rather than lexing
+    # as some other token.
+    r"(?P<STRING>\"[^\"]*\")|"
     r"(?P<NUMBER>\d+(?:\.\d+)?)|"
     r"(?P<IF>if\b)|"
     r"(?P<IDENT>sqrt|lim|exp|sin|cos|tan|Delta|pi|inf|e[pv]|pPAIR|DERV\d+|[A-Za-z][A-Za-z0-9]*|[Α-Ωα-ω∞∫∑∏ℝℂℕℤℚℙℍℓ∇])|"
@@ -631,7 +636,7 @@ class Parser:
         return node
 
     def starts_atom(self) -> bool:
-        return self.current.kind in {"NUMBER", "IDENT", "LPAREN", "MATRIX_OPEN"}
+        return self.current.kind in {"NUMBER", "IDENT", "LPAREN", "MATRIX_OPEN", "STRING"}
 
     def parse_mul(self) -> Node:
         node = self.parse_power()
@@ -814,6 +819,8 @@ class Parser:
             return self._parse_matrix()
         if token := self.accept("NUMBER"):
             return Node("number", token.value)
+        if token := self.accept("STRING"):
+            return Node("text", token.value[1:-1])
         if token := self.accept("ELLIPSIS"):
             return Node("identifier", "…")
         if self.current.kind == "LPAREN":
@@ -970,6 +977,8 @@ def _script_mathml(node: Node) -> etree._Element:
 def node_to_mathml(node: Node) -> etree._Element:
     if node.kind == "number":
         return mml("mn", node.value or "")
+    if node.kind == "text":
+        return mml("mtext", node.value or "")
     if node.kind == "identifier":
         return identifier_mathml(node.value or "")
     if node.kind == "alias":
