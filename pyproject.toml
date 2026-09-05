@@ -32,7 +32,15 @@ classifiers = [
 dependencies = ["lxml>=5.0"]
 
 [project.optional-dependencies]
-dev = ["build>=1.2", "pytest>=8.0", "pytest-cov>=7.0", "ruff>=0.6"]
+# ruff is pinned to one minor series on purpose. It is pre-1.0, so its
+# formatter's stable style may change in any 0.x.0 — 0.16.0 began formatting
+# Python blocks inside Markdown, which turned a green local run into a
+# nine-platform CI failure with no code change behind it. `<0.17` keeps a new
+# formatting generation from arriving unannounced; the floor matches, so a
+# contributor's `pip install -e ".[dev]"` and CI agree on one style rather than
+# disagreeing until a push. Raising both bounds together is a deliberate step:
+# read ruff's changelog, run `ruff format` once, and commit the result.
+dev = ["build>=1.2", "pytest>=8.0", "pytest-cov>=7.0", "ruff>=0.16,<0.17"]
 
 [project.scripts]
 mathfmt = "mathfmt.cli:main"
