@@ -706,6 +706,13 @@ PAGE_HTML = f"""<!doctype html>
   // markup, and parsing it as XML keeps server-supplied document text away
   // from the HTML parser entirely - so event-handler attributes and script
   // elements have no way in, whatever the source document contained.
+  // A FormulaError's message carries a snippet and a caret line aligned for a
+  // monospace terminal. In a proportional div the caret points at nothing, so
+  // the whole message is shown on one line.
+  function oneLine(text) {{
+    return String(text == null ? '' : text).replace(/\\s+/g, ' ').trim();
+  }}
+
   function mathmlNode(xml) {{
     if (!xml) return null;
     var doc = new DOMParser().parseFromString(xml, 'application/xml');
@@ -780,7 +787,7 @@ PAGE_HTML = f"""<!doctype html>
       }} else {{
         // Keep the last good picture, dimmed, rather than blanking it: the
         // reader is mid-edit, and an empty box says less than a stale one.
-        errorEl.textContent = data.error + (data.hint ? '（' + data.hint + '）' : '');
+        errorEl.textContent = oneLine(data.error) + (data.hint ? '（' + data.hint + '）' : '');
         row.classList.add('parse-warn');
         var slot = row.querySelector('.preview');
         if (slot.firstChild) slot.classList.add('stale');
@@ -797,7 +804,7 @@ PAGE_HTML = f"""<!doctype html>
       confidenceLabel(c.confidence) + '置信度</span>';
     if (warn) badges += '<span class="badge warn">解析失败</span>';
     var note = warn
-      ? escapeHtml(c.parse_error || '无法解析，转换时会跳过') + (c.parse_hint ? '（' + escapeHtml(c.parse_hint) + '）' : '')
+      ? escapeHtml(oneLine(c.parse_error) || '无法解析，转换时会跳过') + (c.parse_hint ? '（' + escapeHtml(c.parse_hint) + '）' : '')
       : escapeHtml(c.confidence_reason || '');
     // A div, not a label: the row now holds a text field, and a wrapping label
     // would toggle the checkbox on every click into it. The source line keeps

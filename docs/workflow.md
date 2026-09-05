@@ -60,7 +60,28 @@ row shows the original text, its confidence level, and (for anything MathFmt cou
 not parse) the reason. Candidates are pre-checked using the same conservative
 default as `mathfmt convert` (high confidence only); use the preset buttons
 ("仅高置信度" / "中及以上" / "全部候选" / "全不选") or click individual checkboxes to
-change the selection before converting. Click "转换所选" to apply, then download the
+change the selection before converting.
+
+Each row also shows the formula **rendered**, and its parser-ready text in an
+editable field. Edit the text and click away: the page re-renders it, or shows
+the parse error and hint inline while keeping the last good rendering dimmed so
+you can see what you are replacing. A candidate whose edit does not parse is
+*not* silently unchecked — you are mid-edit, and it is better to see that it is
+broken. What you leave in the field is what gets converted; the server re-parses
+it, so a bad edit is reported in the conversion's skipped list rather than
+written into the document. Clearing a field falls back to the scanned text
+rather than converting an empty formula.
+
+This is where a medium-confidence candidate earns its review: v1.3 reports an
+undelimited LaTeX macro (`ar{x}` in prose) at medium confidence and does not
+auto-select it, and this is where you look at it and decide.
+
+Previews need a browser with MathML support — every current Chromium, Firefox
+and Safari has it. Without it the page says so once and shows the linear text
+instead; editing and validation still work, because validation happens on the
+server.
+
+Click "转换所选" to apply, then download the
 converted document and its JSON scan report from the page. Nothing is uploaded
 anywhere — the server only listens on localhost, and each upload is processed in a
 private temporary directory that is cleaned up automatically. Press Ctrl+C in the

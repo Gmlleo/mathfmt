@@ -318,15 +318,29 @@ Spec §5: falling back to plain text is **not** an error.
 ## Verification beyond the test suite
 
 `tests/test_gui.py` exercises the HTTP API with no browser, so three things it
-cannot see must be checked by hand before release, on one document containing a
-delimited formula, a bare LaTeX macro, and a deliberately broken formula:
+cannot see must be checked outside it.
 
-1. MathML actually renders in Chromium and Firefox (both ship MathML Core).
-2. An edit, a blur, and a re-preview update the picture.
-3. The edited formula reaches the downloaded DOCX.
+**Done 2026-09-05**, driven through the `agent-browser` CLI against
+`mathfmt gui --port 8768 --no-browser` on `doc07_latex.docx` (Chromium):
 
-Record the result in `.claude/memory.md` the way the WPS and LibreOffice QA
-notes already are.
+1. **MathML renders.** All five candidates produced a real `<math>` element,
+   with heights matching actual layout rather than inline fallback —
+   `\frac{a}{b}` 24px, `cases` 40px, `\bar{x}` 10px.
+2. **Edit → blur → re-preview updates the picture.** `\frac{a}{b}` → `mfrac`,
+   edited to `sqrt(x^2+1)` → `msqrt`, then to `root(x,7)` → `mroot`. A broken
+   edit (`x +`) showed the error, dimmed the last good rendering rather than
+   blanking it, and left the candidate checked. `\substack{a}` reported the
+   macro by name, so v1.3's rejection path reaches the GUI intact.
+3. **The edited formula reaches the DOCX.** Converting with `root(x,7)` in the
+   first row produced `m:rad` with `<m:t>7</m:t>` in `word/document.xml` — the
+   scanner had found `\frac{a}{b}` there.
+
+One defect this found, fixed in the same branch: a `FormulaError` message
+carries a caret line aligned for a monospace terminal, which in a proportional
+div pointed at nothing and broke the message across lines. Both the inline edit
+error and the pre-existing candidate-list error now collapse whitespace first.
+
+Recorded in `.claude/memory.md` the way the WPS and LibreOffice QA notes are.
 
 ## Risks
 
