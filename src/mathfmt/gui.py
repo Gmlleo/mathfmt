@@ -34,6 +34,9 @@ from .core import FormulaError, apply_docx, formula_to_mathml, scan_docx
 
 _MAX_UPLOAD_BYTES = 128 * 1024 * 1024
 _MAX_SELECTION_BYTES = 2 * 1024 * 1024
+# One formula, not a document. Generous for any real equation, small enough
+# that a stray upload to this route is rejected before it is parsed.
+_MAX_PREVIEW_BYTES = 64 * 1024
 _SESSION_TTL_SECONDS = 30 * 60
 _DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _PARAGRAPH_PREVIEW_LIMIT = 160
@@ -166,6 +169,9 @@ class _Handler(BaseHTTPRequestHandler):
         if len(segments) == 2 and segments[0] == "apply":
             self._handle_apply(segments[1])
             return
+        if len(segments) == 2 and segments[0] == "preview":
+            self._handle_preview(segments[1])
+            return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     # -- scan: upload a .docx and return its formula candidates for review -----
@@ -227,6 +233,55 @@ class _Handler(BaseHTTPRequestHandler):
             "stem": Path(filename).stem or "output",
             "candidates": candidates,
         }
+
+    # -- preview: render one formula for the review page -----------------------
+
+    def _handle_preview(self, token: str) -> None:
+        """Render one linear formula as MathML, for the page's live preview.
+
+        A formula that does not parse answers 200 with ``ok: false`` and the
+        error: it is a normal answer to a valid request, not a transport
+        failure, and an HTTP error status would make the page fish the body out
+        of an exception. The 4xx statuses here are reserved for the request
+        being wrong — an expired session, or a body too large to be a formula.
+        """
+        if self.server.sessions.get(token) is None:
+            self.close_connection = True
+            self._json_error(HTTPStatus.NOT_FOUND, "会话已失效，请重新上传文件")
+            return
+
+        length = self._read_content_length()
+        if length is None:
+            return
+        if length > _MAX_PREVIEW_BYTES:
+            self.close_connection = True
+            self._json_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "公式文本过长")
+            return
+
+        try:
+            linear = self.rfile.read(length).decode("utf-8").strip()
+        except UnicodeDecodeError:
+            self._json_error(HTTPStatus.BAD_REQUEST, "公式文本必须是 UTF-8")
+            return
+
+        if not linear:
+            self._json_response(HTTPStatus.OK, {"ok": False, "error": "公式不能为空", "hint": None})
+            return
+
+        try:
+            mathml = etree.tostring(formula_to_mathml(linear), encoding="unicode")
+        except FormulaError as error:
+            details = error.to_dict()
+            self._json_response(
+                HTTPStatus.OK,
+                {
+                    "ok": False,
+                    "error": str(details.get("message", "")),
+                    "hint": details.get("hint"),
+                },
+            )
+            return
+        self._json_response(HTTPStatus.OK, {"ok": True, "mathml": mathml})
 
     # -- apply: convert the reviewed selection for an existing scan session ----
 

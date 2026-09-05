@@ -451,3 +451,108 @@ def test_scan_sends_no_mathml_for_an_unparseable_candidate(tmp_path: Path, runni
     assert candidate["parse_status"] != "ok"
     assert candidate["mathml"] is None
     assert candidate["linear"] == "x = +"
+
+
+def _post_preview(base_url: str, token: str, linear: str) -> tuple[int, dict[str, object]]:
+    request = urllib.request.Request(
+        f"{base_url}/preview/{token}",
+        data=linear.encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "text/plain; charset=utf-8"},
+    )
+    try:
+        with urllib.request.urlopen(request) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def _token_for(tmp_path: Path, base_url: str) -> str:
+    source = make_docx(tmp_path / "session.docx", document_xml=_document_with("公式 $x^2$ 在此。"))
+    status, payload = _post_scan(base_url, source)
+    assert status == 200
+    return str(payload["token"])
+
+
+def test_preview_renders_a_valid_formula(tmp_path: Path, running_server: Any) -> None:
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, payload = _post_preview(base_url, token, "(a+b)/c")
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert str(payload["mathml"]).startswith("<math")
+    assert "mfrac" in str(payload["mathml"])
+
+
+def test_preview_reports_a_parse_error_without_failing_the_request(
+    tmp_path: Path, running_server: Any
+) -> None:
+    # A formula that does not parse is a normal answer to a valid request, not a
+    # transport failure — the page needs the error text, and an HTTP error
+    # status would make it fish the body out of an exception instead.
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, payload = _post_preview(base_url, token, "x +")
+
+    assert status == 200
+    assert payload["ok"] is False
+    assert payload["error"]
+    assert "operand is missing" in str(payload["hint"])
+
+
+def test_preview_names_an_unsupported_latex_macro(tmp_path: Path, running_server: Any) -> None:
+    # v1.3's rejection path reaching the GUI unchanged: the reader is told which
+    # macro is unsupported, not that a backslash is unrecognized.
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, payload = _post_preview(base_url, token, r"\substack{a}")
+
+    assert status == 200
+    assert payload["ok"] is False
+    assert "substack" in str(payload["error"])
+    assert "section 10" in str(payload["hint"])
+
+
+def test_preview_expands_a_supported_latex_macro(tmp_path: Path, running_server: Any) -> None:
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, payload = _post_preview(base_url, token, r"\frac{a}{b}")
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert "mfrac" in str(payload["mathml"])
+
+
+def test_preview_rejects_an_unknown_session(running_server: Any) -> None:
+    # A token is only ever issued by /scan, and expires with the session. That
+    # is what keeps this from being an open formula compiler on 127.0.0.1.
+    base_url, _ = running_server
+
+    status, payload = _post_preview(base_url, "not-a-real-token", "x^2")
+
+    assert status == 404
+    assert payload["error"]
+
+
+def test_preview_rejects_an_oversized_body(tmp_path: Path, running_server: Any) -> None:
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, _ = _post_preview(base_url, token, "x" * (gui._MAX_PREVIEW_BYTES + 1))
+
+    assert status == 413
+
+
+def test_preview_rejects_an_empty_formula(tmp_path: Path, running_server: Any) -> None:
+    base_url, _ = running_server
+    token = _token_for(tmp_path, base_url)
+
+    status, payload = _post_preview(base_url, token, "   ")
+
+    assert status == 200
+    assert payload["ok"] is False
