@@ -381,25 +381,61 @@ def test_nary_absorbs_the_operand_but_lim_does_not() -> None:
     assert [etree.QName(child).localname for child in num] == ["limLow", "r", "d"]
 
 
-def test_nary_operand_is_the_rest_of_the_enclosing_sequence() -> None:
-    # The operand is the remainder of the sequence the operator sits in, not
-    # just the next sibling. For MathFmt's own output the two rules coincide —
-    # `_nary_mathml` always wraps the operator and its body in an mrow of
-    # exactly two children — so this pins the choice against foreign MathML,
-    # where MML2OMML.XSL reaches the same answer for this input by merging
-    # adjacent token elements into a single run.
+def _flat_foreign_sum() -> etree._Element:
+    """The canonical LaTeXML/MathJax serialization of ``\sum_{i=1}^{n} a = S``:
+    one flat mrow, with the summand and the relation all siblings of the
+    operator."""
     mrow = etree.SubElement(etree.Element("math"), "mrow")
     munderover = etree.SubElement(mrow, "munderover")
     etree.SubElement(munderover, "mo").text = "∑"
     for text in ("i", "n"):
         etree.SubElement(munderover, "mi").text = text
     etree.SubElement(mrow, "mi").text = "a"
-    etree.SubElement(mrow, "mo").text = "+"
-    etree.SubElement(mrow, "mi").text = "b"
+    etree.SubElement(mrow, "mo").text = "="
+    etree.SubElement(mrow, "mi").text = "S"
+    return mrow.getparent()
+
+
+def test_nary_operand_is_the_next_sibling_only() -> None:
+    # The operand is the single following sibling, as MML2OMML.XSL selects it
+    # (`following-sibling::*[1]`), not the rest of the sequence.
+    #
+    # The two rules agree on everything MathFmt emits, because `_nary_mathml`
+    # returns mrow(operator, body). They diverge on flat foreign MathML, and
+    # there the difference is visible: m:e carries grow="1", so absorbing
+    # "a = S" stretches the summation sign across the equals sign. MathFmt's
+    # own grammar settles it — "sum(i=1,n) a = S" parses with body "a" alone,
+    # the relation staying outside — so over-scoping here would contradict the
+    # grammar this output has to round-trip through.
+    omath = mathml_to_omml_py(_flat_foreign_sum())
+
+    assert [etree.QName(child).localname for child in omath] == ["nary", "r", "r"]
+    assert "".join(omath[0].find(qname(M_NS, "e")).itertext()) == "a"
+    assert "".join(omath[1].itertext()) == "="
+    assert "".join(omath[2].itertext()) == "S"
+
+
+def test_nary_operand_unwraps_a_following_mrow() -> None:
+    # An mrow sibling is unwrapped into m:e rather than becoming a nested
+    # group, which is what MML2OMML's NaryHandleMrowMstyle does and what keeps
+    # "sum(i=1,n) i + 1" (whose body core.py wraps in its own mrow) identical
+    # under either scope rule.
+    mrow = etree.SubElement(etree.Element("math"), "mrow")
+    munderover = etree.SubElement(mrow, "munderover")
+    etree.SubElement(munderover, "mo").text = "∑"
+    for text in ("i", "n"):
+        etree.SubElement(munderover, "mi").text = text
+    body = etree.SubElement(mrow, "mrow")
+    etree.SubElement(body, "mi").text = "a"
+    etree.SubElement(body, "mo").text = "+"
+    etree.SubElement(body, "mi").text = "b"
+    etree.SubElement(mrow, "mi").text = "c"
 
     omath = mathml_to_omml_py(mrow.getparent())
-    assert [etree.QName(child).localname for child in omath] == ["nary"]
-    assert "".join(omath[0].find(qname(M_NS, "e")).itertext()) == "a+b"
+    assert [etree.QName(child).localname for child in omath] == ["nary", "r"]
+    e = omath[0].find(qname(M_NS, "e"))
+    assert [etree.QName(child).localname for child in e] == ["r", "r", "r"]
+    assert "".join(e.itertext()) == "a+b"
 
 
 def _stacked(omath: etree._Element) -> tuple[str, str, str]:

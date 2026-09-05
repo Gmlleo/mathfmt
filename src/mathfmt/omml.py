@@ -184,7 +184,7 @@ def _is_nary_operator_group(elem: etree._Element) -> bool:
 
 
 def _convert_sequence(children: list[etree._Element], parent: etree._Element) -> None:
-    """Convert a run of MathML siblings, nesting an n-ary operator's operand.
+    r"""Convert a run of MathML siblings, nesting an n-ary operator's operand.
 
     In MathML the operand of a big operator is a *sibling* of the
     ``munderover``, not a child of it — ``_nary_mathml`` (core.py) emits
@@ -194,23 +194,35 @@ def _convert_sequence(children: list[etree._Element], parent: etree._Element) ->
     sibling list, so every place that converts a sequence of MathML children
     goes through here rather than looping over ``_convert`` directly.
 
-    The operand is **the rest of the enclosing sequence**. ``_nary_mathml``
-    wraps the operator and its body in an ``mrow`` of exactly two children, so
-    that ``mrow`` boundary is precisely the operand's scope: in
-    ``e^x = sum(n=0,oo) x^n/n!`` only the fraction is absorbed, because the
-    ``e^x =`` prefix lives in the *outer* ``mrow``. MML2OMML.XSL reaches the
-    same answer by a different route — it takes the single
-    ``following-sibling::*[1]`` and then merges adjacent token elements into
-    one run — and the two rules coincide for every shape MathFmt emits.
-    Taking the rest of the sequence, rather than only the next sibling, is the
-    safer reading for foreign MathML: under-scoping would silently render part
-    of the operand as though it sat outside the operator.
+    **The operand is the single next sibling**, unwrapped if it is an ``mrow``
+    — the same selection MML2OMML.XSL makes (``following-sibling::*[1]``, then
+    ``NaryHandleMrowMstyle``). Everything after it stays a sibling of the
+    ``m:nary``.
+
+    Taking the *rest* of the sequence instead would agree on everything
+    MathFmt emits, since ``_nary_mathml`` returns an ``mrow`` of operator and
+    body. It diverges on flat foreign MathML — the shape LaTeXML and MathJax
+    produce for ``\sum_{i=1}^{n} a = S`` is one flat ``mrow`` — and there it
+    is wrong: ``m:e`` carries ``grow="1"``, so absorbing ``a = S`` stretches
+    the summation sign across the equals sign. MathFmt's own grammar settles
+    it, since ``sum(i=1,n) a = S`` parses with body ``a`` alone.
+
+    (Office's *output* for that flat input does show ``a=S`` inside ``m:e``,
+    but only because its token-run merging folds the following ``mo``/``mi``
+    into the one ``m:r`` it already started — the same merging that puts a
+    dangling ``a=`` in ``m:e`` when a fraction follows. That is an artifact of
+    how it serializes runs, not a second opinion about scope.)
     """
-    for index, child in enumerate(children):
+    index = 0
+    while index < len(children):
+        child = children[index]
         if _is_nary_operator_group(child):
-            _nary(child, parent, children[index + 1 :])
-            return
+            operand = children[index + 1 : index + 2]
+            _nary(child, parent, operand)
+            index += 1 + len(operand)
+            continue
         _convert(child, parent)
+        index += 1
 
 
 def _convert(elem: etree._Element, parent: etree._Element) -> None:
